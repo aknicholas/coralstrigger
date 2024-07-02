@@ -139,11 +139,13 @@ def drawPayloadWavefront(incoming_wave=False, phi=0, theta=0):
     #plt.zlabel('z [m]')
 
     plt.figure(figsize=(6,8))
-    plt.plot(xpos, zpos, 'v', color='gray', ms=30, alpha=.3)
+    for idx,x in enumerate(xpos):
+        plt.plot(xpos[idx], ypos[idx], marker=(3,0,phi_tilt[idx] -90), color='gray', ms=30, alpha=.3)
+    #plt.plot(xpos, zpos, 'v', color='gray', ms=30, alpha=.3)
     l=0
     while l < len(loc):
-        plt.text(xpos[l], zpos[l], loc[l], fontsize=12)
-        plt.text(xpos[l]+0.5, zpos[l]+0.5, str(l+1), fontsize=12)
+        plt.text(xpos[l], ypos[l], loc[l], fontsize=12)
+        plt.text(xpos[l]+0.5, ypos[l]+0.5, str(l+1), fontsize=12)
         l+=1
     plt.xlabel(' x [m]')
     plt.ylabel(' z [m]')
@@ -153,6 +155,74 @@ def drawPayloadWavefront(incoming_wave=False, phi=0, theta=0):
     #plt.ylim([-8, 1])
     plt.show()
 
+def drawWavefrontPlanes(incoming_wave=False, phi=0, theta=0):
+    import myplot    
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    r=1
+    x_planewave = r* np.cos(np.radians(theta)) * np.cos(np.radians(phi))
+    y_planewave = r* np.cos(np.radians(theta)) * np.sin(np.radians(phi))
+    #z_planewave = (-0.5* r) +r* np.sin(np.radians(theta))
+    z_planewave = r* np.sin(np.radians(theta))
+    if(theta==0):
+        z_planewave=0
+    fig = plt.figure(figsize=(12,12))
+    ax1 = fig.add_subplot(221)
+    ax2 = fig.add_subplot(222)
+    ax3 = fig.add_subplot(223)
+    for idx,x in enumerate(xpos):
+        #for rotation of the triangle markers in the respective views, its important to note that degrees is units, and 0 degrees is △ (or upward pointing trianlge)
+        # -90 degrees is Clockwise rotation of triangle, pointing right ▷
+        #ax1.scatter(xpos[idx], ypos[idx], marker=(3,0,phi_tilt[idx] -90), color='gray', s=150, alpha=.3)
+        #ax1.scatter(xpos[idx], ypos[idx], marker=(3,0,-150), color='gray', s=150, alpha=.3)
+        ax1.arrow(xpos[idx],ypos[idx],np.cos(np.radians(phi_tilt[idx])),np.sin(np.radians(phi_tilt[idx])),
+                  head_width=0.75, head_length=0.1, fc='k', ec='k')
+        print("x-y angle: {}, triangle angle is: {}".format(phi_tilt[idx],phi_tilt[idx] -90))
+        ax1.arrow(0, 0, r_ant[0]*x_planewave,r_ant[0]*y_planewave, head_width=0.75, head_length=0.1, fc='k', ec='k')
+        # x-z plane has tan Psi=z/x
+        # use angle Psi for unit vectors to show pointing in x-z plane
+        # z_c = sin (psi)
+        # x_c = cos(psi)
+        psi=np.arctan( np.tan(np.radians(theta_tilt[idx])) / np.cos( np.radians(phi_tilt[idx]) ) )
+        if(np.abs(phi_tilt[idx]) >90):
+           psi+=np.pi
+        dx=np.cos(psi)
+        dz=np.sin(psi)
+        ax2.arrow(xpos[idx],zpos[idx],dx,dz, head_width=0.75, head_length=0.1, fc='k', ec='k')
+
+        # y-z plane has tan Psi=z/y
+        # use angle Psi for unit vectors to show pointing in y-z plane
+        # z_c = sin (psi)
+        # y_c = cos(psi)
+        psi=np.arctan( np.tan(np.radians(theta_tilt[idx])) / np.sin( np.radians(phi_tilt[idx]) ) )
+        if(phi_tilt[idx] >180 or phi_tilt[idx]<0):
+           psi+=np.pi
+        dy=np.cos(psi)
+        dz=np.sin(psi)
+        ax3.arrow(ypos[idx],zpos[idx],dy,dz, head_width=0.75, head_length=0.1, fc='k', ec='k')
+
+        ax1.text(xpos[idx], ypos[idx], loc[idx], fontsize=12)
+        ax1.text(xpos[idx]+0.5, ypos[idx]+0.5, str(idx+1), fontsize=12)
+        ax2.text(xpos[idx], zpos[idx], loc[idx], fontsize=12)
+        ax2.text(xpos[idx]+0.5+idx*0.2, zpos[idx]-0.5, str(idx+1), fontsize=12)
+        ax3.text(ypos[idx], zpos[idx], loc[idx], fontsize=12)
+        ax3.text(ypos[idx]+0.5+idx*0.2, zpos[idx]-0.5, str(idx+1), fontsize=12)
+    #plt.plot(xpos, zpos, 'v', color='gray', ms=30, alpha=.3)
+#    l=0
+#    while l < len(loc):
+#        ax1.text(xpos[l], ypos[l], loc[l], fontsize=12)
+#        ax1.text(xpos[l]+0.5, ypos[l]+0.5, str(l+1), fontsize=12)
+#        l+=1
+    ax1.set_xlabel(' x [m]')
+    ax1.set_ylabel(' y [m]')
+    ax2.set_xlabel(' x [m]')
+    ax2.set_ylabel(' z [m]')
+    ax3.set_xlabel(' y [m]')
+    ax3.set_ylabel(' z [m]')
+    print("(x,y,z)=({},{},{})".format(x_planewave,y_planewave,z_planewave))
+    #plt.ylim([-8, 1])
+    plt.show()
+
 if __name__=='__main__':
     #drawPayload(incoming_wave=True, phi=30, theta=-80)
-    drawPayloadWavefront(incoming_wave=True, phi=30, theta=-80)
+    drawWavefrontPlanes(incoming_wave=True, phi=30, theta=-80)
