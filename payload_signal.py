@@ -247,7 +247,7 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
     #print(delay)
     #construct trigger_waves to keep the wfs that passed the trigger
     trigger_waves=numpy.zeros((len(trigger_sectors), 4, len(impulse.voltage)))
-    print("trigger waves.shape is: {}".format(trigger_waves.shape))
+    #print("trigger waves.shape is: {}".format(trigger_waves.shape))
 
     #I dont know what multiplier does here yet
     multiplier=[]
@@ -323,7 +323,7 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
 
     # Make sure we use the (possibly downsampled) time vector
     timebase = impulse.time
-    n_samples = trigger_waves.shape[2]  # should now equal len(timebase)
+    #n_samples = trigger_waves.shape[2]  # should now equal len(timebase)
     #print("timebase len:", len(timebase), "waveform len:", n_samples)
     
     if plot:
@@ -340,9 +340,9 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
         global_vmax = max(v.max() for v in all_voltages)
 
         # Create subplots
-        axes = plt.subplots(n_used, 1,
-                            figsize=(6, 3 * n_used),
-                            sharex=True)[1]
+        fig, axes = plt.subplots(n_used, 1,
+                                 figsize=(6, 3 * n_used),
+                                 sharex=True)
         if n_used == 1:
             axes = [axes]
 
@@ -358,9 +358,10 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
             ax.set_title(f"Sector {key[0]} Ring {key[1]}")
 
         axes[-1].set_xlabel("Time [ns]")
-        plt.suptitle(f"φ = {phi}°, θ = {el}°", fontsize=16)
+        fig.suptitle(f"φ = {phi}°, θ = {el}°", fontsize=16)
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
+        plt.savefig("plots/debug.png")
 
     return trigger_waves, timebase, multiplier
 
@@ -536,7 +537,8 @@ if __name__=="__main__":
     #getPayloadWaveforms(22.5, -25, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, noise=numpy.real(noise[2]), plot=True)
     #try without noise and just plane wave as impulse
     
-    getPayloadWaveforms(45, -45, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, plot=True)
+    getPayloadWaveforms(0, -45, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, plot=True, downsample=True)
+    print(impulse.time)
     #getPayloadWaveforms(45, -45, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, noise=numpy.real(noise[2]), plot=True)
 
     #I think I need to include just the plane wave (i.e. no noise added and maybe not even impulse/ impulse response) to see how the delay and all that works for a "trigger_wave" in the getPayload function
