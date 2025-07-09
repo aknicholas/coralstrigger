@@ -1,10 +1,12 @@
 import numpy
 import myplot
 import matplotlib.pyplot as plt
-import tools.aso_geometry as aso_geometry
+import tools.CoRaLs_geometry as aso_geometry
 import tools.constants as constants
-import payload_signal_barebones as payload
+import tools.filters as filters
+import payload_signal as payload
 import math
+import os
 
 def coherentSum(waveforms, timebase, delays, downsample=False, ringmask=[1,1]):
     '''
@@ -33,10 +35,14 @@ def coherentSum(waveforms, timebase, delays, downsample=False, ringmask=[1,1]):
         coh_sum = numpy.zeros(len(waveforms[0,0]))
         for i in range(waveforms.shape[0]):
             for j in range(waveforms.shape[1]):
-                if ringmask[j]:
-                    _wave = waveforms[i,j]
-                    _delay = -int(numpy.round(delays[i,j]/(timebase[1]-timebase[0])))
-                    coh_sum = coh_sum + numpy.roll(_wave, _delay)
+                try:
+                    if len(ringmask) == 0 or j >= len(ringmask) or not ringmask[j]:
+                        continue
+                except Exception:
+                    continue
+                _wave = waveforms[i,j]
+                _delay = -int(numpy.round(delays[i,j]/(timebase[1]-timebase[0])))
+                coh_sum = coh_sum + numpy.roll(_wave, _delay)
 
         coh_sum = coh_sum[::decimate_factor]
         timebase = timebase[::decimate_factor]
@@ -66,98 +72,126 @@ def powerSum(coh_sum, window=32, step=16):
 
                 
 if __name__=='__main__':
+    phi_scan_width = 2
+    el_scan_width = 2
+    #phi_values = [phi for phi in range(-phi_scan_width, phi_scan_width + 1, 2)]
+    #theta_values = [theta for theta in range(-el_scan_width, el_scan_width + 1, 2)]
+    phi_values = [0]
+    theta_values = [-45]
 
-    phi = 22.5
-    theta = -10
+    lowpass = filters.Shannon_Whitaker(fs=3e9, plot=False)
 
-    #eplane, hplane = payload.beamPattern(plot=False)
-    eplane = payload.beamPattern(plot=True,which_plane='E',which_pol='V')
-    hplane = payload.beamPattern(plot=True,which_plane='H',which_pol='V')
-    #impulse = payload.loadImpulse('impulse/triggerTF_02TH.txt')
-    #impulse = payload.prepImpulse(impulse)
-    #impulse = loadImpulse('impulse/triggerTF_02TH.txt')
-    impulse = payload.loadImpulse('impulse/coralsLPDA_impResponse.txt')
-    payload.gimmePlotsImpulse(impulse)
-    #impulse2 = loadImpulse('impulse/triggerTF_02TH.txt')
-    #impulse = prepImpulse(impulse)
-    impulse = payload.prepImpulse(impulse, highpass_cutoff=0.15, lowpass_cutoff=2)
+    # Define global scan bounds
 
-    print ('timestep of input pulse [ns]:', impulse.dt)
-    
-    delays = payload.getRemappedDelays(phi, theta, [1,2,3,4,5])
-    waveforms, timebase,_ = payload.getSinglePayloadWaveform(phi, theta, [1,2,3,4,5], impulse, (eplane, hplane))
-    #getSinglePayloadWaveform(22.5, -25, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, noise=None, plot=True)
-    GimmeInfo(waveforms)
-    coh_sum, timebase_coh_sum  = coherentSum(waveforms, timebase, delays, False)
-    #coh_sum, timebase_coh_sum  = coherentSum(waveforms, timebase, delays, True)
-    #coh_sum2, timebase_coh_sum2  = coherentSum(waveforms, timebase, delays, False)
+    #phi_scan_width = 2
+    #el_scan_width = 2
+    global_phiscan_start = min(phi_values) - phi_scan_width
+    global_phiscan_stop = max(phi_values) + phi_scan_width
+    global_elscan_start = min(theta_values) - el_scan_width
+    global_elscan_stop = max(theta_values) + el_scan_width
 
-    #print len(coh_sum2), len(timebase_coh_sum2)
+    global_phiscan_range = numpy.arange(global_phiscan_start, global_phiscan_stop, 0.1)
+    global_elscan_range = numpy.arange(global_elscan_start, global_elscan_stop, 0.1)
+    global_phi_grid, global_el_grid = numpy.meshgrid(global_phiscan_range, global_elscan_range)
+    summed_heatmap = numpy.zeros_like(global_phi_grid, dtype=float)
+    summed_count = numpy.zeros_like(global_phi_grid, dtype=float)
 
-    fig, ax = plt.subplots(2,1, sharex=True)
-    #ax[0].plot(timebase_coh_sum, coh_sum,  ':o', c='black',label='ideal', ms=2)
-    #ax[0].plot(timebase_coh_sum2, coh_sum2,  '-o', c='red',label='ritc sample step', alpha=0.6, ms=4)
-    ax[0].plot(timebase_coh_sum, coh_sum,  ':o', c='black', ms=2)
-    ax[0].legend()
-    ax[0].set_ylabel('16-ant coherent sum')
+    for phi in phi_values:
+        ringmask = [1,1,0,0,0,0,0,1]
+        for theta in theta_values:
+            eplane = payload.beamPattern(plot=False,which_plane='E',which_pol='V')
+            hplane = payload.beamPattern(plot=False,which_plane='H',which_pol='V')
+            impulse = payload.loadImpulse('impulse/corals_impulse_sci.txt')
+            #payload.gimmePlotsImpulse(impulse)
+            impulse = payload.prepImpulse(impulse, highpass_cutoff=0.15, lowpass_cutoff= 2)
+            #payload.gimmePlotsImpulse(impulse)
+            trigger_sectors_phi=[1,2,3,4,5,6,7,8]
+            #payload.getPayloadWaveforms(phi, theta, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, plot=True)
+            print ('timestep of input pulse [ns]:', impulse.dt)
+            delays = payload.getRemappedDelays(phi, theta, trigger_sectors_phi)
+            
+            waveforms, timebase,_ = payload.getPayloadWaveforms(phi, theta, trigger_sectors_phi, impulse, (eplane, hplane), downsample = True, snr = 5, plot = False)
+            #getSinglePayloadWaveform(22.5, -25, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, noise=None, plot=True)
+            GimmeInfo(waveforms)
+            
+            #scan phi, 45 degrees:
+            phiscan_start = phi - phi_scan_width
+            phiscan_stop = phi + phi_scan_width
+            elscan_start = theta - el_scan_width
+            elscan_stop = theta + el_scan_width
 
-    power, frames = powerSum(coh_sum)
-    #power2, frames2 = powerSum(coh_sum2)
-    
-    #ax[1].plot(timebase_coh_sum[:frames*16:16]+timebase_coh_sum[8], power, '--', c='black', label='ideal')
-    #ax[1].plot(timebase_coh_sum2[:frames*16:16]+timebase_coh_sum2[8], power2, '-', c='red', label='ritc sample step', alpha=0.6)
-    ax[1].plot(timebase_coh_sum[:frames*16:16]+timebase_coh_sum[8], power, '--', c='black')
-    ax[1].legend()
-    ax[1].set_xlabel('Time [ns]')
-    ax[1].set_ylabel('Power [arb]')
-    ax[1].set_ylim([-1, 31])
+            # Create 2D histogram heatmap for phi/theta scan
+            phiscan_range = numpy.arange(phiscan_start, phiscan_stop, 0.1)
+            elscan_range = numpy.arange(elscan_start, elscan_stop, 0.1)
+            phi_grid, el_grid = numpy.meshgrid(phiscan_range, elscan_range)
+        
+            # Compute power for each (phi, theta) pair
+            heatmap = numpy.zeros_like(phi_grid, dtype=float)
+            for i, elscan in enumerate(elscan_range):
+                for j, phiscan in enumerate(phiscan_range):
+                    waveforms, timebase, _ = payload.getPayloadWaveforms(phiscan, elscan, trigger_sectors_phi, impulse,  (eplane, hplane), downsample = True, snr=5,plot = False)
+                    coh_sum, _ = coherentSum(waveforms, timebase, delays, False, ringmask)
+                    power, _ = powerSum(coh_sum)
+                    heatmap[i, j] = numpy.max(power)
+            # Normalize to dB
+            heatmap_db = 10 * numpy.log10(heatmap / numpy.max(heatmap))
+            fig, ax = plt.subplots(figsize=(8, 6))
+            c = ax.pcolormesh(phi_grid, el_grid, heatmap_db, shading='auto', cmap='viridis')
+            ax.set_xlabel('Phi [degrees]')
+            ax.set_ylabel('Theta [degrees]')
+            ax.set_title(f"Coherent Sum Power Heatmap, Beam at $\\phi$ = {phi}, $\\theta$ = {theta}")
+            plt.colorbar(c, ax=ax, label='Power [dB]')
+            fig.tight_layout()
+            filename = f"plots/plot_phi_{phi}_theta_{theta}.png"
+            plt.savefig(filename, bbox_inches='tight')
+            plt.close()
+            
+            # Find the indices in the global grid where this local heatmap should be placed
+            phi_offset = phiscan_start - global_phiscan_start
+            el_offset = elscan_start - global_elscan_start
+            heatmap_rows, heatmap_cols = heatmap.shape
 
-    #scan phi, 45 degrees:
-    phi_scan_power_true = []
-    phi_scan_power_ritc = []
-
-    phiscan_start = 0
-    elscan_start = -30
-    
-    for phiscan in range(phiscan_start, 45, 1):
-        waveforms, timebase,_ = payload.getSinglePayloadWaveform(phiscan, theta, [1,2,3,4], impulse, (eplane, hplane))
-        coh_sum, timebase_coh_sum  = coherentSum(waveforms, timebase, delays, False, ringmask = [1,1,1,1])
-        coh_sum2, timebase_coh_sum2  = coherentSum(waveforms, timebase, delays, False, ringmask = [1,1,1,0])
-        power, frames = powerSum(coh_sum)
-        power2, frames2  = powerSum(coh_sum2)
-        phi_scan_power_true.append(numpy.max(power))
-        phi_scan_power_ritc.append(numpy.max(power2))
-
-    el_scan_power_true = []
-    el_scan_power_ritc = []
-
-    for elscan in range(elscan_start,10,1):
-        waveforms, timebase,_ = payload.getSinglePayloadWaveform(phi, elscan, [1,2,3,4], impulse, (eplane, hplane))
-        coh_sum, timebase_coh_sum = coherentSum(waveforms, timebase, delays, False, ringmask = [1,1,1,1])
-        coh_sum2, timebase_coh_sum2  = coherentSum(waveforms, timebase, delays, False, ringmask = [1,1,1,0])
-        power, frames = powerSum(coh_sum)
-        power2, frames2 = powerSum(coh_sum2)
-
-        el_scan_power_true.append(numpy.max(power))
-        el_scan_power_ritc.append(numpy.max(power2))    
-    
-
-    fig, ax = plt.subplots(2,1)
-    ax[0].plot(numpy.array(range(45),dtype=float)-phiscan_start-22.5, 10*numpy.log10(phi_scan_power_true/numpy.max(phi_scan_power_true)),'--', c='black', label='4-ring')
-    ax[0].plot(numpy.array(range(45),dtype=float)-phiscan_start-22.5, 10*numpy.log10(phi_scan_power_ritc/numpy.max(phi_scan_power_ritc)), '-', c='red', label='3-ring, no top', alpha=0.6)
-    ax[0].set_ylabel('Power (normalized) [dB]')
-    ax[0].set_xlabel('Phi [degrees]')
-    ax[0].set_ylim([-10, 1])
-    ax[0].legend(loc='upper left')
-    ax[0].grid(True)
-
-    ax[1].plot(numpy.array(range(40),dtype=float)+elscan_start+10, 10*numpy.log10(el_scan_power_true/numpy.max(el_scan_power_true)),'--', c='black', label='4-ring')
-    ax[1].plot(numpy.array(range(40),dtype=float)+elscan_start+10, 10*numpy.log10(el_scan_power_ritc/numpy.max(el_scan_power_ritc)), '-', c='red', label='3-ring, no top', alpha=0.6)
-    ax[1].set_ylabel('Power (normalized) [dB]')
-    ax[1].set_xlabel('theta [degrees]')
-    ax[1].set_ylim([-10, 1])
-    ax[1].legend(loc='upper left')  
-    ax[1].grid(True)
-    plt.show()
-                                              
- 
+            # Add current beam's heatmap to the sum at the correct location
+            row_start = max(0, int(round((elscan_start - global_elscan_start) / 0.1)))
+            col_start = max(0, int(round((phiscan_start - global_phiscan_start) / 0.1)))
+            row_end = min(row_start + heatmap.shape[0], summed_heatmap.shape[0])
+            col_end = min(col_start + heatmap.shape[1], summed_heatmap.shape[1])
+            local_row_end = row_end - row_start
+            local_col_end = col_end - col_start
+            # Before adding to summed_heatmap, check shapes
+            target_shape = summed_heatmap[row_start:row_end, col_start:col_end].shape
+            source_shape = heatmap[:local_row_end, :local_col_end].shape
+            if target_shape != source_shape:
+                print(f"Shape mismatch: target {target_shape}, source {source_shape}")
+                # Optionally, adjust local_row_end/local_col_end to min of both shapes
+                min_rows = min(target_shape[0], source_shape[0])
+                min_cols = min(target_shape[1], source_shape[1])
+                summed_heatmap[row_start:row_start+min_rows, col_start:col_start+min_cols] += heatmap[:min_rows, :min_cols]
+                summed_count[row_start:row_start+min_rows, col_start:col_start+min_cols] += (heatmap[:min_rows, :min_cols] > 0).astype(float)
+            else:
+                summed_heatmap[row_start:row_end, col_start:col_end] += heatmap[:local_row_end, :local_col_end]
+                summed_count[row_start:row_end, col_start:col_end] += (heatmap[:local_row_end, :local_col_end] > 0).astype(float)
+            # Check if the summed_heatmap or summed_count arrays are empty and raise an error if so
+            if summed_heatmap.size == 0 or summed_count.size == 0:
+                raise ValueError("summed_heatmap or summed_count array is empty. Check input data and loop logic.")
+            # After all phi/theta, save the big plot
+            with numpy.errstate(divide='ignore', invalid='ignore'):
+                avg_heatmap = numpy.where(summed_count > 0, summed_heatmap / summed_count, 0)
+                avg_heatmap_db = 10 * numpy.log10(avg_heatmap / numpy.max(avg_heatmap))
+            avg_heatmap = numpy.where(summed_count>0, summed_heatmap / summed_count, 0)
+            amax = avg_heatmap.max()
+            if amax <= 0:
+                print("Warning: all-zero averaged heatmap across all beams")
+                avg_heatmap_db = numpy.full_like(avg_heatmap, -numpy.inf)
+            else:
+                avg_heatmap_db = 10 * numpy.log10(avg_heatmap / amax)
+            fig, ax = plt.subplots(figsize=(10, 8))
+            c = ax.pcolormesh(global_phi_grid, global_el_grid, avg_heatmap_db, shading='auto', cmap='viridis')
+            ax.set_xlabel('Phi [degrees]')
+            ax.set_ylabel('Theta [degrees]')
+            ax.set_title('Summed Coherent Sum Power Heatmap (All Beams)')
+            plt.colorbar(c, ax=ax, label='Power [dB]')
+            fig.tight_layout()
+            os.makedirs("plots", exist_ok=True)
+            plt.savefig("plots/summed_beam_heatmap.png", bbox_inches='tight')
+            plt.close()

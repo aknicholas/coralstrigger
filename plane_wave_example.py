@@ -6,7 +6,7 @@ from scipy import interpolate
 from scipy.signal import lfilter, butter, cheby1
 import matplotlib.pyplot as plt
 
-def loadImpulse(filename='impulse/triggerTF_02TH.txt'):
+def loadImpulse(filename='impulse/corals_impulse_downsampled.txt'):
 
     dat=numpy.loadtxt(filename)
     impulse=waveform.Waveform(dat[:,1], time=dat[:,0])
@@ -42,7 +42,7 @@ if __name__=="__main__":
     print(period*num_periods)
 
     # need sampling rate now...
-    sampling_period= 3*10**(-10)# lets do 500MHz or 50Mega samples / sec
+    sampling_period= 3.333*10**(-10)# ~3GHz 
     times=numpy.linspace(0,N_samples*sampling_period,N_samples)
     print(times)
     volty=numpy.sin(omega*times)
@@ -69,7 +69,7 @@ if __name__=="__main__":
     #quit()
     #impulse = loadImpulse()
     # or load impulse event
-    impulse = loadImpulse('impulse/triggerTF_02TH.txt')
+    impulse = loadImpulse('impulse/corals_impulse_downsampled.txt')
     
     gimmePlots(impulse)
     #impulse = prepImpulse(impulse)

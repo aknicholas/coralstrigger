@@ -12,11 +12,12 @@ ring_map = {
     'B'  : 0,
     'T'  : 1,}
 ring_map_inv = {v: k for k, v in ring_map.copy().items()}
-    
-def loadImpulse(filename='impulse/triggerTF_02TH.txt'):
+
+def loadImpulse(filename='impulse/corals_impulse_sci.txt'):
 
     dat=numpy.loadtxt(filename)
     impulse=waveform.Waveform(dat[:,1], time=dat[:,0])
+    print(impulse.gimmeInfo(filename))
     return impulse
 
 def prepImpulse(impulse, upsample=10, filter=True, highpass_cutoff=0.28, lowpass_cutoff=1.10 ):
@@ -27,7 +28,7 @@ def prepImpulse(impulse, upsample=10, filter=True, highpass_cutoff=0.28, lowpass
     impulse.zeropad(4096)
     #impulse.takeWindow([300, 1024+200])
     impulse.fft()
-    impulse.upsampleFreqDomain(upsample)
+    #impulse.upsampleFreqDomain(upsample)
     impulse.time = impulse.time-impulse.time[0]
     
     if filter:
@@ -46,9 +47,9 @@ def prepImpulse(impulse, upsample=10, filter=True, highpass_cutoff=0.28, lowpass
     #set Vpp = 1
     impulse.voltage = impulse.voltage / (numpy.max(impulse.voltage) - numpy.min(impulse.voltage))
 
-    start = numpy.argmax(impulse.voltage)-3200
-    impulse.takeWindow([start, start+10000])
-    impulse.time = impulse.time-impulse.time[0]
+    #start = numpy.argmax(impulse.voltage)-3200
+    #impulse.takeWindow([start, start+10000])
+    #impulse.time = impulse.time-impulse.time[0]
 
     
     return impulse
@@ -61,80 +62,70 @@ def prepImpulse(impulse, upsample=10, filter=True, highpass_cutoff=0.28, lowpass
 # don't really need a spline since its all a function currently, but eventually need a spline for real resp data included...
 # This function returns a H_plane beamPattern tuple that has both a el and phi resp
 
-def beamPattern(plot=False,which_plane='E', which_pol='V'):
+def beamPattern(plot=False, which_plane='E', which_pol='V', selected_az=None, selected_el=None):
     '''
     CoRaLS proxy beam pattern
     '''
-    num_az=361
-    az=numpy.linspace(-180,180,num_az)
-    #print(len(az))
-    #print(az)
-    num_el=181
-    el=numpy.linspace(-90,90,num_el)
-    #el = -90:90;
-    #fc = [150*10**6,300*10**6,450*10**6,600*10**6]; # units in MHz
-    #fc2 = 150e6:50e6:850e6;
-    #fc2=np.arange(150*10**6,850*10**6,50*10**6) # step size of 50MHz
-    #c = physconst('Lightspeed');
-    #c_speed=299792458 #m/s
-    resp = 1*numpy.ones((num_el,num_az))
-    el_i = 0 
+    num_az = 361
+    az = numpy.linspace(-180, 180, num_az)
+    num_el = 181
+    el = numpy.linspace(-90, 90, num_el)
+    resp = 1 * numpy.ones((num_el, num_az))
+    el_i = 0
     az_i = 0
-    while el_i<len(el):
+    while el_i < len(el):
         az_i = 0
-        while az_i<len(az):
-            resp[el_i,az_i] = 10*numpy.log10(resp[el_i,az_i]*(numpy.cos(numpy.radians(el[el_i]))**(6))*numpy.cos(numpy.radians((az[az_i])/(2.0)))**(10))
-            az_i+=1
-        el_i+=1
-    '''
-    angle=
-    angle = [-50,-40,-30,-20,-10,0,10,20,30,40,50]
-    eplane_vpol = [-7.5, -5, -3, -1.5, -.5, 0, -.5, -1.5, -3, -5, -7.5]
-    hplane_vpol = [-16, -11, -6, -3, -1, 0, -1, -3, -6, -11, -16]
-    interp_angle = numpy.arange(-50,51,1)    
-    eplane_vpol_interp = interpolate.interp1d(angle, eplane_vpol, kind='cubic')
-    hplane_vpol_interp = interpolate.interp1d(angle, hplane_vpol, kind='cubic')
-    '''
-    if which_plane=='E':
-        if which_pol=='V':
-            # eplane and vpol response at a phi?
-            plane_interp=interpolate.interp1d(el, resp[:,int(num_az/2)], kind='cubic')
-        elif which_pol=='H':
-            # eplane and hpol response at a el?
-            # now this is obviously wrong but I am not sure what to put for the hpol response of the eplane of the antenna...
-            # so for now stick with vpol responses...
-            plane_interp=interpolate.interp1d(az, resp[int(num_el/2),:], kind='cubic')
-    elif which_plane=='E1':
-        plane_interp=interpolate.interp1d(el, resp[:,int(num_az/2)], kind='cubic')
-    elif which_plane=='H':
-        if which_pol=='V':
-            # hplane and vpol response at a el seems to be what was happening for the antenna responses
-            plane_interp=interpolate.interp1d(az, resp[int(num_el/2),:], kind='cubic')
-        elif which_pol=='H':
-            # hplane and hpol response at a az?
-            # now this is obviously wrong but I am not sure what to put for the hpol response of the eplane of the antenna...
-            # so for now stick with vpol responses...
-            plane_interp=interpolate.interp1d(el, resp[:,int(num_az/2)], kind='cubic')
-    elif which_plane=='H1':
-        plane_interp = interpolate.interp1d(el, resp[:,int(num_az/2)], kind='cubic')
-    #we can pick a phi I suppose for this plot. but I am not sure if this is phi or theta. It may have been symmetric?
+        while az_i < len(az):
+            resp[el_i, az_i] = 10 * numpy.log10(
+                resp[el_i, az_i] * (numpy.cos(numpy.radians(el[el_i])) ** (6)) * numpy.cos(numpy.radians((az[az_i]) / (2.0))) ** (10)
+            )
+            az_i += 1
+        el_i += 1
+
+    if which_plane == 'E':
+        if which_pol == 'V':
+            plane_interp = interpolate.interp1d(el, resp[:, int(num_az / 2)], kind='cubic')
+        elif which_pol == 'H':
+            plane_interp = interpolate.interp1d(az, resp[int(num_el / 2), :], kind='cubic')
+    elif which_plane == 'E1':
+        plane_interp = interpolate.interp1d(el, resp[:, int(num_az / 2)], kind='cubic')
+    elif which_plane == 'H':
+        if which_pol == 'V':
+            plane_interp = interpolate.interp1d(az, resp[int(num_el / 2), :], kind='cubic')
+        elif which_pol == 'H':
+            plane_interp = interpolate.interp1d(el, resp[:, int(num_az / 2)], kind='cubic')
+    elif which_plane == 'H1':
+        plane_interp = interpolate.interp1d(el, resp[:, int(num_az / 2)], kind='cubic')
+
     if plot:
-        #plt.plot(interp_angle, eplane_vpol_interp(interp_angle), label='vpol Eplane')
-        #plt.plot(interp_angle, hplane_vpol_interp(interp_angle), label='vpol Hplane')
-        az_i=0
+        az_i = 0
         while az_i < num_az:
-            #plt.plot(el, resp[:,int(num_az/2)])
-            plt.plot(el, resp[:,az_i])
-            if az_i==int(num_az/2):
-                plt.plot(el, resp[:,az_i],'--',label=str(which_plane))
-            az_i+=10
+            plt.plot(el, resp[:, az_i])
+            if az_i == int(num_az / 2):
+                plt.plot(el, resp[:, az_i], '--', label=str(which_plane))
+            az_i += 10
+
+        # Highlight the selected azimuth and elevation if provided
+        if selected_az is not None:
+            plt.axvline(x=selected_az, color='red', linestyle=':', label=f'Selected az={selected_az}°')
+        if selected_el is not None:
+            plt.axvline(x=selected_el, color='blue', linestyle=':', label=f'Selected el={selected_el}°')
+
         plt.legend(loc='upper left')
         plt.grid(True)
         plt.xlabel('off-boresight angle [deg.]')
         plt.ylabel('amplitude [dB]')
-        plt.xlim([-50,50])
-        plt.ylim([-10,1])
-
+        plt.xlim([-50, 50])
+        plt.ylim([-10, 1])
+        # Add annotation box
+        if selected_az is not None or selected_el is not None:
+            txt = ""
+            if selected_az is not None:
+                txt += f"Azimuth: {selected_az}°\n"
+            if selected_el is not None:
+                txt += f"Elevation: {selected_el}°"
+            plt.gca().text(0.05, 0.95, txt, transform=plt.gca().transAxes, fontsize=10,
+                           verticalalignment='top', bbox=dict(boxstyle="round", fc="w", alpha=0.7))
         plt.show()
     return plane_interp
 def dBtoVoltsAtten(db_value):
@@ -166,11 +157,11 @@ def getPayloadDelays(phi,el,trigger_sectors):
 
 def getSinglePayloadWaveform(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, noise=None, plot=False, downsample=False):
     delay = delays.getAllDelays([phi], [el], phi_sectors=trigger_sectors) #gets delays at all antennas     
-    print(type(delay))
-    print(delay)
+    #print(type(delay))
+    print("phi = " , delay[0]["phi"], " theta = ",   delay[0]["theta"])
     #construct trigger_waves to keep the wfs that passed the trigger
     trigger_waves=numpy.zeros((len(trigger_sectors), 4, len(impulse.voltage)))
-    print("trigger waves.shape is: {}".format(trigger_waves.shape))
+    #print("trigger waves.shape is: {}".format(trigger_waves.shape))
 
     # the trigger waves isn't going to have the right shape now, because the code below expects each number index to be either a top or bottom, whereas corals doesn't have that kind of geometry
 
@@ -180,46 +171,47 @@ def getSinglePayloadWaveform(phi, el, trigger_sectors, impulse, beam_pattern, sn
     #not yet optimized for speed
     for delay_i in delay[0]['delays']:
         # calculate the phi and el and correct it to be within the interpolation range [(-90,90) or (-180,180)]
-        phi_interp=phi-aso_geometry.phi_ant[i[0]-1]
-        if phi_interp < -90:
-            delta_phi=phi_interp+90
-            phi_interp=-90-(phi_interp+90)
-        elif phi_interp>90:
-            phi_interp=-180
-
+        phi_interp = phi - aso_geometry.phi_ant[delay_i[0]-1]
+        # Wrap phi_interp to [-180, 180]
+        if phi_interp > 180:
+            phi_interp -= 360
+        elif phi_interp < -180:
+            phi_interp += 360
         # this line below: trigger_waves elements are calculated based on beam_pattern which is a tuple of eplane,hplane interp functions. beam_pattern[1] is hplane and [0] is eplane
         # hplane is evaluated with phi positions of antennas, and eplane is evaluated at el of antennas. The arguments to these are actually the "off-boresight" angle
         # so the argument is an angle that is the difference of incoming wave and the antenna's angle tilt in phi and theta 
         # the numpy.roll function will move the elements forward or backward along the axis, effectively forcing the delay to be taken into account for the impulse.
-        # roll the impulse.voltage which is scaled by 2*snr with the delay: int(numpy.round(delay[0]['delays'][i] / impulse.dt))
+        # roll the impulse.voltage which is scaled by 2*snr with the delay: int(numpy.round(delay[0]['delays'][delay_i] / impulse.dt))
         # we also multiply that impulse.voltage that was rolled by the beam_pattern, b/c the antenna direction and the angle of the impulse wave should be taken into acct
         # 
         #trigger waves is calculated with 2 voltage fractions multiplied in, one from eplane and one from hplane. Trigger wave must be on both?
         delay_i[0]-numpy.min(trigger_sectors)
-        trigger_waves[i[0]-numpy.min(trigger_sectors),ring_map[i[1]]] = \
-            numpy.roll(impulse.voltage * 2 * snr, int(numpy.round(delay[0]['delays'][i] / impulse.dt)))
-        
+        trigger_waves[delay_i[0]-numpy.min(trigger_sectors),ring_map[delay_i[1]]] = \
+            numpy.roll(impulse.voltage * 2 * snr, int(numpy.round(delay[0]['delays'][delay_i] / impulse.dt)))
+        print(impulse.time)
         #there is a multiplier here that is hplane[dphi(phi)] and eplane[del(el)].
-        #multiplier.append(dBtoVoltsAtten(beam_pattern[1](phi-aso_geometry.phi_ant[i[0]-1])) * \
+        #multiplier.append(dBtoVoltsAtten(beam_pattern[1](phi-aso_geometry.phi_ant[delay_i[0]-1])) * \
         #    dBtoVoltsAtten(beam_pattern[0](el -aso_geometry.theta_ant[0])))
         
-
         #add in the noise if its included.
         if noise is not None:
             print("noise shape " + str(noise.shape))
-            print("length of i in payload signal is: {}".format(len(i)))
+            print("length of delay_i in payload signal is: {}".format(len(delay_i)))
             print("length of ring map in payload signal is: {}".format(len(ring_map)))
-            trigger_waves[i[0]-numpy.min(trigger_sectors),ring_map[i[1]]] += \
-                                noise[(i[0]-numpy.min(trigger_sectors))*len(ring_map) + ring_map[i[1]]]
+            trigger_waves[delay_i[0]-numpy.min(trigger_sectors),ring_map[delay_i[1]]] += \
+                                noise[(delay_i[0]-numpy.min(trigger_sectors))*len(ring_map) + ring_map[delay_i[1]]]
 
     '''
     #numpyfied waveform generation. Factor of 2 multipler since impulse Vpp putatively normalized to = 1.0
     trigger_waves2 = numpy.roll(numpy.tile(impulse.voltage,len(trigger_sectors)*len(ring_map)).reshape((len(trigger_sectors)*len(ring_map), len(impulse.voltage))) 
                                 * 2 * snr, (numpy.round(delay2.flatten() / impulse.dt)).astype(numpy.int)).reshape((len(trigger_sectors), len(ring_map), len(impulse.voltage)))  
     '''
+        
     if downsample:
         trigger_waves, impulse.time = downsamplePayload(impulse.time, trigger_waves)
-                       
+
+    print(impulse.time)
+
     if plot:
         fig, ax = plt.subplots(len(ring_map), len(trigger_sectors))
         for i in range(len(trigger_sectors)):
@@ -240,6 +232,7 @@ def getSinglePayloadWaveform(phi, el, trigger_sectors, impulse, beam_pattern, sn
         plt.show()
     
     return trigger_waves, impulse.time, multiplier
+
 def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, noise=None, plot=False, downsample=False):
     '''
     return waveforms for a single phi, el
@@ -250,8 +243,8 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
     '''
     delay = delays.getAllDelays([phi], [el], phi_sectors=trigger_sectors) #gets delays at all antennas
     #delay2 = getRemappedDelays([phi], [el], trigger_sectors) #gets delays at all antennas
-    print(type(delay))
-    print(delay)
+    #print(type(delay))
+    #print(delay)
     #construct trigger_waves to keep the wfs that passed the trigger
     trigger_waves=numpy.zeros((len(trigger_sectors), 4, len(impulse.voltage)))
     print("trigger waves.shape is: {}".format(trigger_waves.shape))
@@ -261,21 +254,22 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
     
     #not yet optimized for speed
     for i in delay[0]['delays']:
-        print("i[1] for delay is: {}".format(i[1]))
-        print("ring map i[1] is: {}".format(ring_map[i[1]]))
-        print("i[0] is {}".format(i[0]))
-        print("numpy.min(trigger sectors) is: {}".format(numpy.min(trigger_sectors)))
+        #print("i[1] for delay is: {}".format(i[1]))
+        #print("ring map i[1] is: {}".format(ring_map[i[1]]))
+        #print("i[0] is {}".format(i[0]))
+        #print("numpy.min(trigger sectors) is: {}".format(numpy.min(trigger_sectors)))
         #,ring_map[i[1]]
-        print("argument to noise: {}".format((i[0]-numpy.min(trigger_sectors))*len(ring_map) + ring_map[i[1]]))
+        #print("argument to noise: {}".format((i[0]-numpy.min(trigger_sectors))*len(ring_map) + ring_map[i[1]]))
 
         # calculate the phi and el and correct it to be within the interpolation range [(-90,90) or (-180,180)]
-        phi_interp=phi-aso_geometry.phi_ant[i[0]-1]
-        if phi_interp < -90:
-            delta_phi=phi_interp+90
-            phi_interp=-90-(phi_interp+90)
-        elif phi_interp>90:
-            phi_interp=-180
-
+        phi_interp = phi - aso_geometry.phi_ant[i[0]-1]
+        # Wrap phi_interp to [-180, 180]
+        if phi_interp > 180:
+            phi_interp -= 360
+        elif phi_interp < -180:
+            phi_interp += 360
+        #print('geometry adjusted phi for antenna located at ' + str(i[1]) + str(i[0]) + ' = ' + str(phi_interp))
+       
         # this line below: trigger_waves elements are calculated based on beam_pattern which is a tuple of eplane,hplane interp functions. beam_pattern[1] is hplane and [0] is eplane
         # hplane is evaluated with phi positions of antennas, and eplane is evaluated at el of antennas. The arguments to these are actually the "off-boresight" angle
         # so the argument is an angle that is the difference of incoming wave and the antenna's angle tilt in phi and theta 
@@ -284,16 +278,17 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
         # we also multiply that impulse.voltage that was rolled by the beam_pattern, b/c the antenna direction and the angle of the impulse wave should be taken into acct
         # 
         #trigger waves is calculated with 2 voltage fractions multiplied in, one from eplane and one from hplane. Trigger wave must be on both?
-            
-        print("roll argument as integer for this trigger-wave-delay: {}".format(int(numpy.round(delay[0]['delays'][i] / impulse.dt))))
+        #print("roll argument as integer for this trigger-wave-delay: {}".format(int(numpy.round(delay[0]['delays'][i] / impulse.dt))))
         trigger_waves[i[0]-numpy.min(trigger_sectors),ring_map[i[1]]] = \
             numpy.roll(impulse.voltage * 2 * snr, int(numpy.round(delay[0]['delays'][i] / impulse.dt))) * \
-            dBtoVoltsAtten(beam_pattern[1](phi-aso_geometry.phi_ant[i[0]-1])) * \
-            dBtoVoltsAtten(beam_pattern[0](el -aso_geometry.theta_ant[0]))
-        
+            dBtoVoltsAtten(beam_pattern[1](phi_interp)) * \
+            dBtoVoltsAtten(beam_pattern[0](el - aso_geometry.theta_ant[i[0]-1]))
+        #print('Theta ' + str(aso_geometry.theta_ant[i[0]-1]))
+        #print('Attenuation factor is ' + str(dBtoVoltsAtten(beam_pattern[1](phi_interp)) * \
+        #    dBtoVoltsAtten(beam_pattern[0](el - aso_geometry.theta_ant[i[0]-1]))))
         #there is a multiplier here that is hplane[dphi(phi)] and eplane[del(el)].
-        multiplier.append(dBtoVoltsAtten(beam_pattern[1](phi-aso_geometry.phi_ant[i[0]-1])) * \
-            dBtoVoltsAtten(beam_pattern[0](el -aso_geometry.theta_ant[0])))
+        multiplier.append(dBtoVoltsAtten(beam_pattern[1](phi_interp)) * \
+            dBtoVoltsAtten(beam_pattern[0](el - aso_geometry.theta_ant[i[0]-1])))
         
 
         #add in the noise if its included.
@@ -309,30 +304,65 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
     trigger_waves2 = numpy.roll(numpy.tile(impulse.voltage,len(trigger_sectors)*len(ring_map)).reshape((len(trigger_sectors)*len(ring_map), len(impulse.voltage))) 
                                 * 2 * snr, (numpy.round(delay2.flatten() / impulse.dt)).astype(numpy.int)).reshape((len(trigger_sectors), len(ring_map), len(impulse.voltage)))  
     '''
+    print(phi, el)
+    # Downsample if requested
     if downsample:
-        trigger_waves, impulse.time = downsamplePayload(impulse.time, trigger_waves)
-                                        
-    if plot:
-        fig, ax = plt.subplots(len(ring_map), len(trigger_sectors))
-        for i in range(len(trigger_sectors)):
-            for j in range(len(ring_map)):
-                if j != 0:
-                    ax[len(ring_map)-j-1,i].set_xticklabels([])
-                if i != 0:
-                    ax[len(ring_map)-j-1,i].set_yticklabels([])
+        trigger_waves, new_time = downsamplePayload(impulse.time, trigger_waves)
+        impulse.time = new_time  # for any later code that reads impulse.time
+        new_dt = new_time[1] - new_time[0]
 
-                ax[len(ring_map)-j-1,i].plot(impulse.time, trigger_waves[i,j], label=str(i)+ring_map_inv[j], c='black', lw=1, alpha=0.7)
-                #ax[len(ring_map)-j-1,i].plot(impulse.time, trigger_waves2[i,j],  c='black', lw=1, alpha=0.7)
+        # Debug print of delays in original vs down‑sampled indices
+        print("Delay sample counts (original vs downsampled):")
+        for ant_key, raw_delay in delay[0]['delays'].items():
+            orig_samples = int(round(raw_delay / impulse.dt))
+            down_samples = int(round(raw_delay / new_dt))
+            print(f"  Ant {ant_key}: orig {orig_samples}, down {down_samples}")
 
-                ax[len(ring_map)-j-1,i].legend(loc='upper right')
-                #ax[len(ring_map)-j-1,i].set_ylim([-snr-1,snr+1])
+        # Replace the impulse time with downsampled time
+        impulse.time = new_time
 
-        plt.suptitle('phi = '+str(phi)+'deg.  theta = '+str(el)+'deg.', fontsize=20)
-        #plt.tight_layout()
-        plt.show()
+    # Make sure we use the (possibly downsampled) time vector
+    timebase = impulse.time
+    n_samples = trigger_waves.shape[2]  # should now equal len(timebase)
+    #print("timebase len:", len(timebase), "waveform len:", n_samples)
     
-    return trigger_waves, impulse.time, multiplier
+    if plot:
+        used_keys = list(delay[0]['delays'].keys())
+        n_used = len(used_keys)
 
+        # Collect all traces for consistent y‑limits
+        all_voltages = [
+            trigger_waves[key[0] - numpy.min(trigger_sectors),
+                          ring_map[key[1]]]
+            for key in used_keys
+        ]
+        global_vmin = min(v.min() for v in all_voltages)
+        global_vmax = max(v.max() for v in all_voltages)
+
+        # Create subplots
+        axes = plt.subplots(n_used, 1,
+                            figsize=(6, 3 * n_used),
+                            sharex=True)[1]
+        if n_used == 1:
+            axes = [axes]
+
+        # Plot each antenna’s downsampled waveform
+        for ax, key in zip(axes, used_keys):
+            sector_idx = key[0] - numpy.min(trigger_sectors)
+            ring_idx   = ring_map[key[1]]
+
+            ax.plot(timebase,
+                    trigger_waves[sector_idx, ring_idx],
+                    color='black', lw=1, alpha=0.7)
+            ax.set_ylim(global_vmin, global_vmax)
+            ax.set_title(f"Sector {key[0]} Ring {key[1]}")
+
+        axes[-1].set_xlabel("Time [ns]")
+        plt.suptitle(f"φ = {phi}°, θ = {el}°", fontsize=16)
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+
+    return trigger_waves, timebase, multiplier
 
 def downsamplePayload(time, trigger_waves):
 
@@ -384,17 +414,33 @@ def gimmePlots(impulse,impulse2):
             plt.show()
 
 def gimmePlotsImpulse(impulse):
-            impulse.fft()
-            plt.figure(1)
-            plt.plot(impulse.time_zeroed, impulse.voltage, '-.', ms=2)
-            plt.title("time domain")
-            plt.figure(2)
-            plt.plot(impulse.freq, numpy.abs(impulse.ampl), '-.', ms=2)
-            plt.title("frequency") 
-            plt.xlim([0,2])
-            #plt.figure(4)
-            #plt.plot(impulse.time, numpy.correlate(impulse.voltage, impulse.voltage, "same"))
-            plt.show()
+    impulse.fft()
+    plt.figure(1)
+    plt.plot(impulse.time_zeroed, impulse.voltage, '-.', ms=2)
+    plt.title("Time Domain")
+    plt.xlabel("Time [ns]")
+    plt.ylabel("Voltage [V]")
+
+    plt.figure(2)
+    impulse.fft()  # Ensure FFT is up to date
+    abs_fft = numpy.abs(impulse.ampl)
+    eps = 1e-20
+
+    y_vals = 20 * numpy.log10((abs_fft + eps) / (numpy.max(abs_fft) + eps)) + 3
+    # Find the maximum frequency where y > -80 dB
+    valid_indices = numpy.where(y_vals > -80)[0]
+    if valid_indices.size > 0:
+        max_freq = impulse.freq[valid_indices[-1]] 
+    else:
+        max_freq = 2  # fallback if all values are below -80 dB
+
+    plt.plot(impulse.freq, y_vals, '-.', ms=2)
+    plt.title("Frequency Domain")
+    plt.xlabel("Frequency [GHz]")
+    plt.ylabel("Amplitude [dB]")
+    plt.xlim([0, max_freq])
+    plt.ylim([-80, 5])
+    plt.show()
 
 def gimmePlots2Impulses(impulse,impulse2):
             impulse.fft()
@@ -461,72 +507,19 @@ def loadPlaneWave(freq_i=100*10**6):
 if __name__=="__main__":
     
     import noise
-
     # for corals, the beamPatterns get more complex, so we need to break apart to multiple calls
-    eplane = beamPattern(plot=True,which_plane='E',which_pol='V')
-    hplane = beamPattern(plot=True,which_plane='H',which_pol='V')
-    #eplane = beamPattern(which_plane='E',which_pol='V')
-    #hplane = beamPattern(which_plane='H',which_pol='V')
-
-    #upsampling of my plane wave... checking the original impulse...looks like impulse after upsample should be compared to prepImpulse...
-    #should make some plots of the upsampling and prepimpulse before and after? well gimmePlots shouldn't upsample anyways....
-    #maybe we remove the upsampling from gimmeplots, right now I am upsampling like way too many times by calling gimmePlots...
-
-    #load a sinusiodal plane wave?
-    #impulse=loadPlaneWave(500*10**6) # needs Hz right now
-
-    # on 03/06/24 investigating differences between IR originally put in "TriggerTF_02TH.txt" b/c payload signals look weird with anything but it....
-
+    eplane = beamPattern(plot=False,which_plane='E',which_pol='V')
+    hplane = beamPattern(plot=False,which_plane='H',which_pol='V')
     #load new corals lpda impulse
-    #impulse = loadImpulse('impulse/coralsLPDA_impResponse.txt')
-    #gimmePlotsImpulse(impulse)
-    #impulse2 = loadImpulse('impulse/coralsLPDA_impResponse.txt')
-    #gimmePlotsOriginal(impulse)
-    #impulse = prepImpulse(impulse)
-    #gimmePlots2Impulses(impulse,impulse2)
-
-    # or load impulse event
-    impulse = loadImpulse('impulse/triggerTF_02TH.txt')
-    print("length of file is: {} ".format(impulse.n))
-    gimmePlotsImpulse(impulse)
-
-    #impulse2 = loadImpulse('impulse/triggerTF_02TH.txt')
+    impulse = loadImpulse('impulse/corals_impulse.txt')
     impulse = prepImpulse(impulse)
-    gimmePlotsImpulse(impulse)
-
-    #impulse.gimmeInfo()
-    #gimmePlots(impulse,impulse2)
-    #gimmePlotsImpulse(impulse,impulse2)
-    
+    print("length of file is: {} ".format(impulse.n))
+    trigger_sectors_phi=[1,2,3,4,5,6,7,8]
     thermal_noise = noise.ThermalNoise(0.28, .95, filter_order=(10,10), v_rms=1.0, 
                                        fbins=len(impulse.voltage), 
                                        time_domain_sampling_rate=impulse.dt)
 
-    noise = thermal_noise.makeNoiseWaveform(ntraces=aso_geometry.num_antennas)
-
-    '''
-    plt.figure()
-    plt.plot(impulse.time, impulse.voltage*8+numpy.real(noise[2])[0]) #snr=4
-
-    plt.figure()
-    plt.plot(thermal_noise.frequencies, 20*numpy.log10(thermal_noise.amplitudes/numpy.max(thermal_noise.amplitudes)))
-    plt.plot(impulse.freq, 20*numpy.log10(numpy.abs(impulse.ampl) / numpy.max(numpy.abs(impulse.ampl))))
-
-    plt.figure()
-    sample=50
-    #plt.hist(np.real(mynoise[2][:, sample]), bins=np.arange(-6, 6.1, 0.1), normed=True, histtype='step')
-    plt.hist(numpy.real(noise[2].flatten()), bins=numpy.arange(-6, 6.1, 0.1), normed=True, histtype='step')
-    x = numpy.linspace(-5., 5., 1.e4)
-    g = numpy.exp(-0.5 * x**2 * 1**-2) / (numpy.sqrt(2. * numpy.pi))
-    plt.plot(x, g, label='Normal Distribution')
-    #plt.yscale('log')
-    plt.ylim([1.e-2, 1.e0])
-    plt.xlabel('V / $\sigma$', size=18)
-    plt.ylabel('PDF', size=18)
-    plt.tight_layout()
-    plt.show()
-    '''
-    
+    noise = thermal_noise.makeNoiseWaveform(ntraces=len(trigger_sectors_phi) * len(ring_map))
     #plot a boresight SNR of 5
     #waveform is incoming at phi and el, so maybe better if beam pattern is 2D now?
     #this worked in some way
@@ -534,16 +527,17 @@ if __name__=="__main__":
     #try more channels?
     #phi sectors
     #plot needs to make phi sectors use Corals geometry class, not use just ring_map where it assumes there is a top and bottom antenna at every phi...
-    trigger_sectors_phi=[1,2,3,4]
-    #trigger_sectors_phi=[1,2,3,4,6,7,8]
-    print(len(trigger_sectors_phi))
+    #trigger_sectors_phi=[1,2,3,4]
 
+    #print(len(trigger_sectors_phi))
+    
     #getSinglePayloadWaveform(22.5, -25, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, plot=True)
-
+    print("BEGIN getPayloadWaveforms")
     #getPayloadWaveforms(22.5, -25, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, noise=numpy.real(noise[2]), plot=True)
     #try without noise and just plane wave as impulse
-    getPayloadWaveforms(22.5, -25, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, plot=True)
-    #getPayloadWaveforms(22.5, -25, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, noise=numpy.real(noise[2]), plot=True)
+    
+    getPayloadWaveforms(45, -45, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, plot=True)
+    #getPayloadWaveforms(45, -45, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, noise=numpy.real(noise[2]), plot=True)
 
     #I think I need to include just the plane wave (i.e. no noise added and maybe not even impulse/ impulse response) to see how the delay and all that works for a "trigger_wave" in the getPayload function
     #the trigger_wave here will nto really be anything about a trigger but a check to see if the delays and all that are working correctly...

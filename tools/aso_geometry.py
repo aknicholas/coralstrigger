@@ -51,7 +51,7 @@ theta_ant=-10.*np.ones(len(z_ant))
 #zpos = [-1.3, -1.3, -1.3, -1.3,   -8,  -8,   -8,   -8];
 
 #ritc_sampling
-ritc_sample_rate = 2.6 #GHz
+ritc_sample_rate = 4 #GHz
 ritc_sample_step = 1./ritc_sample_rate #ns
 
 def drawPayload():

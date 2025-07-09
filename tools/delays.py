@@ -104,7 +104,7 @@ def plotDelayDictEvent(delay_dict, event):
         #print(str_to_plot)
         #plt.text(delay_dict[event]['theta'])
         plt.xlabel('pulse arrival time [ns]')
-        plt.ylabel('anita phi sector no.')
+        plt.ylabel('CoRaLS phi sector no.')
         plt.title(str_to_plot)
         plt.tight_layout()
         
@@ -152,28 +152,96 @@ def makeDelayElevationPlot(phi=0.0, phi_sector=1, plot=True):
     
 if __name__=='__main__':
 
-    #example usage:
+    # example usage:
     print(f'anita: {anita.loc!s}')
     print(f'anita: {anita.phisector!s}')
     ## getDelays function:
-    phi = 90.0 #11.25
-    theta = -50
+    phi = 45 #11.25
+    theta = -45
     #print(delay(phi,theta))
-    phi_sectors_of_interest = [1,2,3] #range(1,anita.num_phi_sectors) this will be a top, bottom, and top again..
+    phi_sectors_of_interest = [1,2,8] #range(1,anita.num_phi_sectors) this will be a top, bottom, and top again..
     getDelays(phi, theta, phi_sectors_of_interest, verbose=True)
 
-    
+    # Apply decimation and loop over phi/theta grid
+    decimation_ps = 250  # 250 ps = 0.25 ns
+    decimation_ns = decimation_ps * 1e-3  # convert to ns
+
+    phi_range = np.arange(-60, 61, 1)
+    theta_range = np.arange(-75, -14, 2)
+
+    sample_dt_ns = 0.25  # <-- Set this to your actual sample spacing in ns
+
+    # Track minimum angle change (delta_phi, delta_theta) that causes at least 1 sample change in any antenna
+    min_phi_step = None
+    min_theta_step = None
+
+    # We'll use the first phi/theta as a reference
+    reference_phi = phi_range[0]
+    reference_theta = theta_range[0]
+    reference_delays = delay(reference_phi, reference_theta)
+    reference_selected_delays = []
+    for i in range(len(reference_delays)):
+        if anita.phisector[i] in phi_sectors_of_interest:
+            reference_selected_delays.append(reference_delays[i])
+    reference_delays_decimated = np.round(np.array(reference_selected_delays) / decimation_ns) * decimation_ns
+    reference_delays_samples = reference_delays_decimated / sample_dt_ns
+
+    # Search for minimum phi step
+    for dphi in np.arange(0.01, 5.0, 0.01):
+        test_delays = delay(reference_phi + dphi, reference_theta)
+        test_selected_delays = []
+        for i in range(len(test_delays)):
+            if anita.phisector[i] in phi_sectors_of_interest:
+                test_selected_delays.append(test_delays[i])
+        test_delays_decimated = np.round(np.array(test_selected_delays) / decimation_ns) * decimation_ns
+        test_delays_samples = test_delays_decimated / sample_dt_ns
+        if np.any(np.abs(test_delays_samples - reference_delays_samples) >= 1):
+            min_phi_step = dphi
+            break
+
+    # Search for minimum theta step
+    for dtheta in np.arange(0.01, 5.0, 0.01):
+        test_delays = delay(reference_phi, reference_theta + dtheta)
+        test_selected_delays = []
+        for i in range(len(test_delays)):
+            if anita.phisector[i] in phi_sectors_of_interest:
+                test_selected_delays.append(test_delays[i])
+        test_delays_decimated = np.round(np.array(test_selected_delays) / decimation_ns) * decimation_ns
+        test_delays_samples = test_delays_decimated / sample_dt_ns
+        if np.any(np.abs(test_delays_samples - reference_delays_samples) >= 1):
+            min_theta_step = dtheta
+            break
+
+    print(f"Minimum phi step for 1 sample change: {min_phi_step} deg")
+    print(f"Minimum theta step for 1 sample change: {min_theta_step} deg")
+
+    for phi_val in phi_range:
+        for theta_val in theta_range:
+            delays = delay(phi_val, theta_val)
+            # Only keep delays for selected phi sectors of interest
+            selected_delays = []
+            selected_labels = []
+            for i in range(len(delays)):
+                if anita.phisector[i] in phi_sectors_of_interest:
+                    selected_delays.append(delays[i])
+                    selected_labels.append((anita.phisector[i], anita.loc[i]))
+            # Quantize delays to 250 ps steps
+            delays_decimated = np.round(np.array(selected_delays) / decimation_ns) * decimation_ns
+            delays_samples = delays_decimated / sample_dt_ns
+            print(f"phi={phi_val}, theta={theta_val} " +
+                  ", ".join([f"{label[0]}{label[1]}, {d}" for label, d in zip(selected_labels, delays_samples)]))
+
     ## getAllDelays function:
-    phi = np.array([0.0,0.0])
-    theta = np.array([-30,0.0])
-    phi_sectors_of_interest = [1,2,3,4,5,6,7,8] #range(1,8)
-    data_dict=getAllDelays(phi, theta, phi_sectors_of_interest)
+    phi = np.array([45,0.0])
+    theta = np.array([-45,0.0])
+    phi_sectors_of_interest = [1,2,8] #range(1,8)
+    data_dict = getAllDelays(phi, theta, phi_sectors_of_interest)
 
     ## read DelayDict (read in output of getAllDelays)
     plotDelayDictEvent(data_dict, 0)
     
     ##make del-el plot
-    makeDelayElevationPlot()
+    #makeDelayElevationPlot()
 
     plt.show()
     
