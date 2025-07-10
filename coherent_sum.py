@@ -15,11 +15,11 @@ def coherentSum(waveforms, timebase, delays, downsample=False, ringmask=[1,1]):
     
     #decimates to specified sample rate
     decimate_factor = int(aso_geometry.ritc_sample_step/((timebase[1]-timebase[0])))
-
+    print('decimate factor = ', decimate_factor)
     #downsample to ritc sampling, if input is upsampled:
     if downsample == True:
         coh_sum = numpy.zeros(int(len(waveforms[0,0]) / decimate_factor)) # choice to cast as int, so 333.333 becomes 333
-        
+
         for i in range(waveforms.shape[0]):
             for j in range(waveforms.shape[1]):
                 if ringmask[j]:
@@ -43,7 +43,7 @@ def coherentSum(waveforms, timebase, delays, downsample=False, ringmask=[1,1]):
                 _wave = waveforms[i,j]
                 _delay = -int(numpy.round(delays[i,j]/(timebase[1]-timebase[0])))
                 coh_sum = coh_sum + numpy.roll(_wave, _delay)
-
+    print(len(timebase), len(waveforms[0][0]))
         #coh_sum = coh_sum[::decimate_factor]
         #timebase = timebase[::decimate_factor]
 
@@ -72,13 +72,13 @@ def powerSum(coh_sum, window=32, step=16):
 
                 
 if __name__=='__main__':
-    phi_scan_width = 10
-    el_scan_width = 5
+    phi_scan_width = 30
+    el_scan_width = 60
     #phi_values = [phi for phi in range(-phi_scan_width, phi_scan_width + 1, 2)]
     #theta_values = [theta for theta in range(-el_scan_width, el_scan_width + 1, 2)]
     phi_values = [0]
     theta_values = [-45]
-    angular_res = 1
+    angular_res = 0.1
     lowpass = filters.Shannon_Whitaker(fs=3e9, plot=False)
     eplane = payload.beamPattern(plot=False,which_plane='E',which_pol='V')
     hplane = payload.beamPattern(plot=False,which_plane='H',which_pol='V')
@@ -130,7 +130,7 @@ if __name__=='__main__':
             for i, elscan in enumerate(elscan_range):
                 for j, phiscan in enumerate(phiscan_range):
                     # Generate waveforms for each source direction
-                    waveforms, timebase, _ = payload.getPayloadWaveforms(phiscan, elscan, trigger_sectors_phi, impulse, (eplane, hplane), downsample=False, snr=20, plot=False)
+                    waveforms, timebase, _ = payload.getPayloadWaveforms(phiscan, elscan, trigger_sectors_phi, impulse, (eplane, hplane), downsample=True, snr=20, plot=False)
                     coh_sum, _ = coherentSum(waveforms, timebase, delays, False, ringmask)
                     power, _ = powerSum(coh_sum)
                     heatmap[i, j] = numpy.max(power)  # or numpy.sum(power) depending on what you want

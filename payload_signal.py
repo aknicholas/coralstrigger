@@ -246,7 +246,9 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
     #print(type(delay))
     #print(delay)
     #construct trigger_waves to keep the wfs that passed the trigger
+    print ('impulse voltage length: ', len(impulse.voltage))
     trigger_waves=numpy.zeros((len(trigger_sectors), 4, len(impulse.voltage)))
+    print ('impulse time length: ', len(impulse.time))
     #print("trigger waves.shape is: {}".format(trigger_waves.shape))
 
     #I dont know what multiplier does here yet
@@ -305,12 +307,14 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
                                 * 2 * snr, (numpy.round(delay2.flatten() / impulse.dt)).astype(numpy.int)).reshape((len(trigger_sectors), len(ring_map), len(impulse.voltage)))  
     '''
     print(phi, el)
+    #print ('impulse time length: ', len(impulse.time))
     # Downsample if requested
     if downsample:
+        print ('impulse time length: ', len(impulse.time))
         trigger_waves, new_time = downsamplePayload(impulse.time, trigger_waves)
-        impulse.time = new_time  # for any later code that reads impulse.time
+        #impulse.time = new_time  # for any later code that reads impulse.time
         new_dt = new_time[1] - new_time[0]
-
+        print(len(trigger_waves[0][0]))
         # Debug print of delays in original vs down‑sampled indices
         print("Delay sample counts (original vs downsampled):")
         for ant_key, raw_delay in delay[0]['delays'].items():
@@ -319,10 +323,11 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
             print(f"  Ant {ant_key}: orig {orig_samples}, down {down_samples}")
 
         # Replace the impulse time with downsampled time
-        impulse.time = new_time
-
+        timebase = new_time
+    else:
+        timebase = impulse.time
     # Make sure we use the (possibly downsampled) time vector
-    timebase = impulse.time
+
     #n_samples = trigger_waves.shape[2]  # should now equal len(timebase)
     #print("timebase len:", len(timebase), "waveform len:", n_samples)
     
@@ -368,10 +373,12 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
 def downsamplePayload(time, trigger_waves):
 
     decimate_factor = int(aso_geometry.ritc_sample_step/((time[1]-time[0])))
-
+    print('decimate factor in downsamplePayload = ' ,decimate_factor)
+    print('time length pre decimation ', len(time))
     trigger_waves = trigger_waves[:,:,::decimate_factor]
     time = time[::decimate_factor]
-
+    print('time length post decimation ', len(time))
+    print('trigger_waves length post decimation ', len(trigger_waves[0][0]))
     return trigger_waves, time                                  
 
 def gimmePlotsOriginal(impulse):
