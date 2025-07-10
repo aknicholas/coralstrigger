@@ -43,9 +43,9 @@ def coherentSum(waveforms, timebase, delays, downsample=False, ringmask=[1,1]):
                 _wave = waveforms[i,j]
                 _delay = -int(numpy.round(delays[i,j]/(timebase[1]-timebase[0])))
                 coh_sum = coh_sum + numpy.roll(_wave, _delay)
-    print(len(timebase), len(waveforms[0][0]))
-        #coh_sum = coh_sum[::decimate_factor]
-        #timebase = timebase[::decimate_factor]
+
+        coh_sum = coh_sum[::decimate_factor]
+        timebase = timebase[::decimate_factor]
 
     return coh_sum, timebase
 def GimmeInfo(waveforms):
@@ -85,8 +85,7 @@ if __name__=='__main__':
     trigger_sectors_phi=[1,2,3,4,5,6,7,8]
     # Define global scan bounds
     impulse = payload.loadImpulse('impulse/corals_impulse_sci.txt')
-    impulse = payload.prepImpulse(impulse, highpass_cutoff=0.15, lowpass_cutoff= 2)
-
+    impulse = payload.prepImpulse(impulse, filter = False, highpass_cutoff=0.15, lowpass_cutoff= 2)
     global_phiscan_start = min(phi_values) - phi_scan_width
     global_phiscan_stop = max(phi_values) + phi_scan_width
     global_elscan_start = min(theta_values) - el_scan_width
@@ -102,14 +101,20 @@ if __name__=='__main__':
         ringmask = [1,1,0,0,0,0,0,1]
         for theta in theta_values:
             #payload.gimmePlotsImpulse(impulse)
-            payload.getPayloadWaveforms(phi, theta, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, plot=True)
+            #payload.getPayloadWaveforms(phi, theta, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, downsample=True, plot=True)
             print ('timestep of input pulse [ns]:', impulse.dt)
+            print ('timestep of input pulse [ns]:', impulse.time)
             delays = payload.getRemappedDelays(phi, theta, trigger_sectors_phi)
-            
+            #waveforms, timebase, _ = payload.getPayloadWaveforms(phi, theta, trigger_sectors_phi, impulse, (eplane, hplane), downsample=True, snr=20, plot=False)
+            #print("Non-downsampled delays = " + str(delays/(impulse.dt)))
+            #print("Downsampled timebase = " + str(timebase))
+            # Print downsampled delays
+            #downsampled_delays = -numpy.round(delays / (timebase[0] - timebase[1]))
+            #print("Downsampled delays in clock cycles = " + str(downsampled_delays))
             #getSinglePayloadWaveform(22.5, -25, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, noise=None, plot=True)
             #GimmeInfo(waveforms)
-            
-            #scan phi, 45 degrees:
+
+            #scan phi:
             phiscan_start = phi - phi_scan_width
             phiscan_stop = phi + phi_scan_width
             elscan_start = theta - el_scan_width
@@ -123,14 +128,11 @@ if __name__=='__main__':
             # Compute power for each (phi, theta) pair
             heatmap = numpy.zeros_like(phi_grid, dtype=float)
             
-            # Generate waveforms for fixed source direction
-            # Fix delays for beam direction
-            #delays = payload.getRemappedDelays(phi, theta, trigger_sectors_phi)
-
+            #Iterate over our target grid around current beam
             for i, elscan in enumerate(elscan_range):
                 for j, phiscan in enumerate(phiscan_range):
                     # Generate waveforms for each source direction
-                    waveforms, timebase, _ = payload.getPayloadWaveforms(phiscan, elscan, trigger_sectors_phi, impulse, (eplane, hplane), downsample=True, snr=20, plot=False)
+                    waveforms, timebase, _ = payload.getPayloadWaveforms(phiscan, elscan, trigger_sectors_phi, impulse, (eplane, hplane), downsample=True, snr=20, plot=True)
                     coh_sum, _ = coherentSum(waveforms, timebase, delays, False, ringmask)
                     power, _ = powerSum(coh_sum)
                     heatmap[i, j] = numpy.max(power)  # or numpy.sum(power) depending on what you want

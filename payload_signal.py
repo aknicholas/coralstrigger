@@ -37,13 +37,13 @@ def prepImpulse(impulse, upsample=10, filter=True, highpass_cutoff=0.28, lowpass
         impulse = waveform.Waveform(lfilter(filtercoeff[0], filtercoeff[1], impulse.voltage), 
                                     time=impulse.time)
         impulse.fft()
-        '''
+        
         #lowpass
         filtercoeff = cheby1(4, rp=0.5, Wn=lowpass_cutoff/impulse.freq[-1], btype='lowpass')
         impulse = waveform.Waveform(lfilter(filtercoeff[0], filtercoeff[1], impulse.voltage), 
                                     time=impulse.time)
         impulse.fft()
-        '''
+        
     #set Vpp = 1
     impulse.voltage = impulse.voltage / (numpy.max(impulse.voltage) - numpy.min(impulse.voltage))
 
@@ -246,9 +246,7 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
     #print(type(delay))
     #print(delay)
     #construct trigger_waves to keep the wfs that passed the trigger
-    print ('impulse voltage length: ', len(impulse.voltage))
-    trigger_waves=numpy.zeros((len(trigger_sectors), 4, len(impulse.voltage)))
-    print ('impulse time length: ', len(impulse.time))
+    trigger_waves=numpy.zeros((len(trigger_sectors), len(ring_map), len(impulse.voltage)))
     #print("trigger waves.shape is: {}".format(trigger_waves.shape))
 
     #I dont know what multiplier does here yet
@@ -271,7 +269,6 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
         elif phi_interp < -180:
             phi_interp += 360
         #print('geometry adjusted phi for antenna located at ' + str(i[1]) + str(i[0]) + ' = ' + str(phi_interp))
-       
         # this line below: trigger_waves elements are calculated based on beam_pattern which is a tuple of eplane,hplane interp functions. beam_pattern[1] is hplane and [0] is eplane
         # hplane is evaluated with phi positions of antennas, and eplane is evaluated at el of antennas. The arguments to these are actually the "off-boresight" angle
         # so the argument is an angle that is the difference of incoming wave and the antenna's angle tilt in phi and theta 
@@ -327,9 +324,8 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
     else:
         timebase = impulse.time
     # Make sure we use the (possibly downsampled) time vector
-
-    #n_samples = trigger_waves.shape[2]  # should now equal len(timebase)
-    #print("timebase len:", len(timebase), "waveform len:", n_samples)
+    timebase = impulse.time
+    #print("timebase len:", len(timebase), "waveform len:", trigger_waves.shape[2])
     
     if plot:
         used_keys = list(delay[0]['delays'].keys())
@@ -366,19 +362,22 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
         fig.suptitle(f"φ = {phi}°, θ = {el}°", fontsize=16)
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
-        plt.savefig("plots/debug.png")
+        #plt.savefig(f"plots/debug_phi{phi}_el{el}.png")
 
     return trigger_waves, timebase, multiplier
 
 def downsamplePayload(time, trigger_waves):
 
     decimate_factor = int(aso_geometry.ritc_sample_step/((time[1]-time[0])))
-    print('decimate factor in downsamplePayload = ' ,decimate_factor)
-    print('time length pre decimation ', len(time))
+    print("decimate_factor" + str(decimate_factor))
+    print("trigger_waves shape pre decimation:", trigger_waves.shape)
+    print("time shape pre decimation:", time.shape)
+    print("trigger_waves last dimension pre decimation:", trigger_waves.shape[-1], "time length:", len(time))
     trigger_waves = trigger_waves[:,:,::decimate_factor]
     time = time[::decimate_factor]
-    print('time length post decimation ', len(time))
-    print('trigger_waves length post decimation ', len(trigger_waves[0][0]))
+    print("trigger_waves shape post decimation:", trigger_waves.shape)
+    print("time shape post decimation:", time.shape)
+    print("trigger_waves last dimension post decimation:", trigger_waves.shape[-1], "time length:", len(time))
     return trigger_waves, time                                  
 
 def gimmePlotsOriginal(impulse):

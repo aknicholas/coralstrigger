@@ -64,7 +64,7 @@ center_y=np.sum(y_ant)/len(y_ant)
 center_z=np.sum(z_ant)/len(z_ant)
 #ritc_sampling
 ritc_sample_rate = 4 #GHz
-ritc_sample_step = 1./ritc_sample_rate #ns
+ritc_sample_step = 1/ritc_sample_rate #ns
 
 def drawPayload(incoming_wave=False, phi=0, theta=0):
     import myplot    
