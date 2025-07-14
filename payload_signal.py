@@ -37,13 +37,13 @@ def prepImpulse(impulse, upsample=10, filter=True, highpass_cutoff=0.28, lowpass
         impulse = waveform.Waveform(lfilter(filtercoeff[0], filtercoeff[1], impulse.voltage), 
                                     time=impulse.time)
         impulse.fft()
-        
+        '''
         #lowpass
         filtercoeff = cheby1(4, rp=0.5, Wn=lowpass_cutoff/impulse.freq[-1], btype='lowpass')
         impulse = waveform.Waveform(lfilter(filtercoeff[0], filtercoeff[1], impulse.voltage), 
                                     time=impulse.time)
         impulse.fft()
-        
+        '''
     #set Vpp = 1
     impulse.voltage = impulse.voltage / (numpy.max(impulse.voltage) - numpy.min(impulse.voltage))
 
@@ -188,7 +188,7 @@ def getSinglePayloadWaveform(phi, el, trigger_sectors, impulse, beam_pattern, sn
         delay_i[0]-numpy.min(trigger_sectors)
         trigger_waves[delay_i[0]-numpy.min(trigger_sectors),ring_map[delay_i[1]]] = \
             numpy.roll(impulse.voltage * 2 * snr, int(numpy.round(delay[0]['delays'][delay_i] / impulse.dt)))
-        print(impulse.time)
+        #print(impulse.time)
         #there is a multiplier here that is hplane[dphi(phi)] and eplane[del(el)].
         #multiplier.append(dBtoVoltsAtten(beam_pattern[1](phi-aso_geometry.phi_ant[delay_i[0]-1])) * \
         #    dBtoVoltsAtten(beam_pattern[0](el -aso_geometry.theta_ant[0])))
@@ -246,9 +246,11 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
     #print(type(delay))
     #print(delay)
     #construct trigger_waves to keep the wfs that passed the trigger
-    trigger_waves=numpy.zeros((len(trigger_sectors), len(ring_map), len(impulse.voltage)))
+    #print ('impulse voltage length: ', len(impulse.voltage))
+    trigger_waves=numpy.zeros((len(trigger_sectors), 4, len(impulse.voltage)))
+    #print ('impulse time length: ', len(impulse.time))
     #print("trigger waves.shape is: {}".format(trigger_waves.shape))
-
+    print("phi = {:.2f}, theta = {:.2f}".format(round(delay[0]["phi"], 2), round(delay[0]["theta"], 2)))
     #I dont know what multiplier does here yet
     multiplier=[]
     
@@ -269,6 +271,7 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
         elif phi_interp < -180:
             phi_interp += 360
         #print('geometry adjusted phi for antenna located at ' + str(i[1]) + str(i[0]) + ' = ' + str(phi_interp))
+       
         # this line below: trigger_waves elements are calculated based on beam_pattern which is a tuple of eplane,hplane interp functions. beam_pattern[1] is hplane and [0] is eplane
         # hplane is evaluated with phi positions of antennas, and eplane is evaluated at el of antennas. The arguments to these are actually the "off-boresight" angle
         # so the argument is an angle that is the difference of incoming wave and the antenna's angle tilt in phi and theta 
@@ -303,29 +306,31 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
     trigger_waves2 = numpy.roll(numpy.tile(impulse.voltage,len(trigger_sectors)*len(ring_map)).reshape((len(trigger_sectors)*len(ring_map), len(impulse.voltage))) 
                                 * 2 * snr, (numpy.round(delay2.flatten() / impulse.dt)).astype(numpy.int)).reshape((len(trigger_sectors), len(ring_map), len(impulse.voltage)))  
     '''
-    print(phi, el)
+    #print(phi, el)
     #print ('impulse time length: ', len(impulse.time))
     # Downsample if requested
     if downsample:
-        print ('impulse time length: ', len(impulse.time))
+        #print ('impulse time length: ', len(impulse.time))
         trigger_waves, new_time = downsamplePayload(impulse.time, trigger_waves)
         #impulse.time = new_time  # for any later code that reads impulse.time
         new_dt = new_time[1] - new_time[0]
-        print(len(trigger_waves[0][0]))
+        #print(len(trigger_waves[0][0]))
         # Debug print of delays in original vs down‑sampled indices
+        '''
         print("Delay sample counts (original vs downsampled):")
         for ant_key, raw_delay in delay[0]['delays'].items():
             orig_samples = int(round(raw_delay / impulse.dt))
             down_samples = int(round(raw_delay / new_dt))
             print(f"  Ant {ant_key}: orig {orig_samples}, down {down_samples}")
-
+        '''
         # Replace the impulse time with downsampled time
         timebase = new_time
     else:
         timebase = impulse.time
     # Make sure we use the (possibly downsampled) time vector
-    timebase = impulse.time
-    #print("timebase len:", len(timebase), "waveform len:", trigger_waves.shape[2])
+
+    #n_samples = trigger_waves.shape[2]  # should now equal len(timebase)
+    #print("timebase len:", len(timebase), "waveform len:", n_samples)
     
     if plot:
         used_keys = list(delay[0]['delays'].keys())
@@ -362,22 +367,19 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
         fig.suptitle(f"φ = {phi}°, θ = {el}°", fontsize=16)
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
-        #plt.savefig(f"plots/debug_phi{phi}_el{el}.png")
+        plt.savefig("plots/debug.png")
 
     return trigger_waves, timebase, multiplier
 
 def downsamplePayload(time, trigger_waves):
 
     decimate_factor = int(aso_geometry.ritc_sample_step/((time[1]-time[0])))
-    print("decimate_factor" + str(decimate_factor))
-    print("trigger_waves shape pre decimation:", trigger_waves.shape)
-    print("time shape pre decimation:", time.shape)
-    print("trigger_waves last dimension pre decimation:", trigger_waves.shape[-1], "time length:", len(time))
+    #print('decimate factor in downsamplePayload = ' ,decimate_factor)
+    #print('time length pre decimation ', len(time))
     trigger_waves = trigger_waves[:,:,::decimate_factor]
     time = time[::decimate_factor]
-    print("trigger_waves shape post decimation:", trigger_waves.shape)
-    print("time shape post decimation:", time.shape)
-    print("trigger_waves last dimension post decimation:", trigger_waves.shape[-1], "time length:", len(time))
+    #print('time length post decimation ', len(time))
+    #print('trigger_waves length post decimation ', len(trigger_waves[0][0]))
     return trigger_waves, time                                  
 
 def gimmePlotsOriginal(impulse):
