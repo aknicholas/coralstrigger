@@ -41,9 +41,9 @@ if __name__=='__main__':
         args.power_file = default_power
         print(f"No path supplied after --power-file; using default: {args.power_file}")
     # If you just want to (re)generate power sums from raw noise, do that first then exit:
-    # noise_data = numpy.load('noise/simulated_noise.npy').flatten()
-    # generatePowerSums(numpy.real(noise_data), window=args.window, step=args.step)
-    # sys.exit(0)
+    #noise_data = numpy.load('noise/simulated_noise.npy').flatten()
+    #generatePowerSums(numpy.real(noise_data), window=args.window, step=args.step)
+    #sys.exit(0)
 
     # -------- Load power sums ----------
     if not os.path.exists(args.power_file):
