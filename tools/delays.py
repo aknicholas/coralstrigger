@@ -156,8 +156,8 @@ if __name__=='__main__':
     print(f'anita: {anita.loc!s}')
     print(f'anita: {anita.phisector!s}')
     ## getDelays function:
-    phi = 45 #11.25
-    theta = -45
+    phi = 90 #11.25
+    theta = 0
     #print(delay(phi,theta))
     phi_sectors_of_interest = [1,2,8] #range(1,anita.num_phi_sectors) this will be a top, bottom, and top again..
     getDelays(phi, theta, phi_sectors_of_interest, verbose=True)

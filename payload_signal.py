@@ -54,7 +54,7 @@ def prepImpulse(impulse, upsample=10, filter=True, highpass_cutoff=0.28, lowpass
     
     return impulse
 
-#beamPattern interpolation from datafiles or function. For corals right now this is function not data.
+# beamPattern interpolation from datafiles or function. For corals right now this is function not data.
 # we should break this into 2 sections for E_plane and H_plane of antennas and then we can do beam pattern for them based on the plane and both phi and el for each plane...
 # we use h_plane and e_plane as the same resp, just h_plane is rotated by 90 for resp with respect to el I guess...
 
@@ -266,10 +266,27 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
         # calculate the phi and el and correct it to be within the interpolation range [(-90,90) or (-180,180)]
         phi_interp = phi - aso_geometry.phi_ant[i[0]-1]
         # Wrap phi_interp to [-180, 180]
-        if phi_interp > 180:
+        if phi_interp > 180 and phi_interp < 360:
             phi_interp -= 360
-        elif phi_interp < -180:
+        elif phi_interp > 360:
+            phi_interp -= 540
+        elif phi_interp < -180 and phi_interp > -360:
             phi_interp += 360
+        elif phi_interp < -360:
+            phi_interp += 540
+        
+        el_interp = el - aso_geometry.theta_ant[i[0]-1]
+        # Wrap el_interp to [-180, 180]
+        if el_interp > 90 and el_interp < 180:
+            el_interp -= 180
+        elif el_interp > 180:
+            el_interp -= 270
+        elif el_interp < -90 and el_interp > -180:
+            el_interp += 180
+        elif el_interp < -180:
+            el_interp += 270
+        #print(el_interp)
+        #print(beam_pattern[0](el_interp))
         #print('geometry adjusted phi for antenna located at ' + str(i[1]) + str(i[0]) + ' = ' + str(phi_interp))
        
         # this line below: trigger_waves elements are calculated based on beam_pattern which is a tuple of eplane,hplane interp functions. beam_pattern[1] is hplane and [0] is eplane
@@ -284,7 +301,7 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
         trigger_waves[i[0]-numpy.min(trigger_sectors),ring_map[i[1]]] = \
             numpy.roll(impulse.voltage * 2 * snr, int(numpy.round(delay[0]['delays'][i] / impulse.dt))) * \
             dBtoVoltsAtten(beam_pattern[1](phi_interp)) * \
-            dBtoVoltsAtten(beam_pattern[0](el - aso_geometry.theta_ant[i[0]-1]))
+            dBtoVoltsAtten(beam_pattern[0](el_interp))
         #print('Theta ' + str(aso_geometry.theta_ant[i[0]-1]))
         #print('Attenuation factor is ' + str(dBtoVoltsAtten(beam_pattern[1](phi_interp)) * \
         #    dBtoVoltsAtten(beam_pattern[0](el - aso_geometry.theta_ant[i[0]-1]))))
@@ -366,8 +383,10 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
         axes[-1].set_xlabel("Time [ns]")
         fig.suptitle(f"φ = {phi}°, θ = {el}°", fontsize=16)
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plt.show()
         plt.savefig("plots/debug.png")
+        plt.show()
+
+
 
     return trigger_waves, timebase, multiplier
 

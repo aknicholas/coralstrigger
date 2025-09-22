@@ -1,6 +1,6 @@
 import numpy as np
 
-num_phi_sectors = 4
+num_phi_sectors = 8
 num_skirt_rings = 0 # nothing like this yet in Corals sim
 num_top_rings = 0 # probably should be 1 top ring and 1 bottom ring, but the entire idea of "phi" sectors in ANITA is that antennas from multiple rings will have same phi for triggering purposes. 
 #num_antennas = num_phi_sectors * (num_top_rings + num_skirt_rings)
@@ -18,7 +18,7 @@ for i in range(num_phi_sectors):
     phisector.append(i+1)
 
 
-minimus = 6e-7
+
 #azimuthal direction of antennas, degrees
 #phi_ant  = np.tile(np.arange(0., 360., 360./num_phi_sectors), 4)
 
@@ -28,12 +28,12 @@ minimus = 6e-7
 #xpos = [ 7.5,    0, -7.5,    0,  5.6, 5.6, -5.6, -5.6]
 #ypos = [   0,  7.5,    0, -7.5, -5.6, 5.6,  5.6, -5.6]
 #zpos = [-1.3, -1.3, -1.3, -1.3,   -8,  -8,   -8,   -8]
-xpos = [np.sqrt(2),np.sqrt(2),-np.sqrt(2),-np.sqrt(2)]
-ypos = [0,0,0,0]
-zpos = [np.sqrt(2),-np.sqrt(2),-np.sqrt(2),np.sqrt(2)]
-
-phi_tilt   = [ 90,90,90,90]
-theta_tilt = [ 0, 0, 0, 0]
+xpos      = [ 7.5,  5.6,    0, -5.6, -7.5, -5.6,    0,  5.6]
+ypos      = [   0,  5.6,  7.5,  5.6,    0, -5.6, -7.5, -5.6]
+zpos      = [-1.3,   -8, -1.3,   -8, -1.3,   -8, -1.3,   -8] 
+#real
+phi_tilt   = [   0,   45,   90,  135,  180, -135,  -90,  -45]
+theta_tilt = [ -30,  -60,  -30,  -60,  -30,  -60,  -30,  -60]
 #make them all the same
 #phi_tilt   = [   45,   45,   45,  45,  45, 45,  45,  45]
 #theta_tilt = [ -30,  -30,  -30,  -30,  -30,  -30,  -30,  -30]
@@ -65,19 +65,7 @@ center_z=np.sum(z_ant)/len(z_ant)
 #ritc_sampling
 ritc_sample_rate = 4 #GHz
 ritc_sample_step = 1/ritc_sample_rate #ns
-# Hardcoded antenna positions for a square layout, 2 meter cross span, zero elevation
 
-phi_tilt = [90, 90, 90, 90]  # all antennas point in the same direction (y-axis)
-theta_tilt = [0, 0, 0, 0]       # zero elevation for all antennas
-
-x_ant = np.array(xpos)
-y_ant = np.array(ypos)
-z_ant = np.array(zpos)
-r_ant = np.sqrt(x_ant**2 + y_ant**2 + z_ant**2)
-
-center_x = np.mean(x_ant)
-center_y = np.mean(y_ant)
-center_z = np.mean(z_ant)
 def drawPayload(incoming_wave=False, phi=0, theta=0):
     import myplot    
     import matplotlib.pyplot as plt
@@ -118,7 +106,6 @@ def drawPayload(incoming_wave=False, phi=0, theta=0):
     plt.ylabel(' z [m]')
     #plt.ylim([-8, 1])
     plt.show()
-
 
 def drawPayloadWavefront(incoming_wave=False, phi=0, theta=0):
     import myplot    
@@ -183,7 +170,7 @@ def drawWavefrontPlanes(incoming_wave=False, phi=0, theta=0):
     ax1 = fig.add_subplot(221)
     ax2 = fig.add_subplot(222)
     ax3 = fig.add_subplot(223)
-    for idx in range(len(xpos)):
+    for idx,x in enumerate(xpos):
         #for rotation of the triangle markers in the respective views, its important to note that degrees is units, and 0 degrees is △ (or upward pointing trianlge)
         # -90 degrees is Clockwise rotation of triangle, pointing right ▷
         #ax1.scatter(xpos[idx], ypos[idx], marker=(3,0,phi_tilt[idx] -90), color='gray', s=150, alpha=.3)
@@ -207,13 +194,9 @@ def drawWavefrontPlanes(incoming_wave=False, phi=0, theta=0):
         # use angle Psi for unit vectors to show pointing in y-z plane
         # z_c = sin (psi)
         # y_c = cos(psi)
-        sin_phi = np.sin(np.radians(phi_tilt[idx]))
-        if np.isclose(sin_phi, 0):
-            psi = 0  # or set to np.pi/2, depending on desired behavior
-        else:
-            psi = np.arctan( np.tan(np.radians(theta_tilt[idx])) / sin_phi )
-            if(phi_tilt[idx] >180 or phi_tilt[idx]<0):
-                psi+=np.pi
+        psi=np.arctan( np.tan(np.radians(theta_tilt[idx])) / np.sin( np.radians(phi_tilt[idx]) ) )
+        if(phi_tilt[idx] >180 or phi_tilt[idx]<0):
+           psi+=np.pi
         dy=np.cos(psi)
         dz=np.sin(psi)
         ax3.arrow(ypos[idx],zpos[idx],dy,dz, head_width=0.75, head_length=0.1, fc='k', ec='k')
@@ -239,8 +222,7 @@ def drawWavefrontPlanes(incoming_wave=False, phi=0, theta=0):
     print("(x,y,z)=({},{},{})".format(x_planewave,y_planewave,z_planewave))
     #plt.ylim([-8, 1])
     plt.show()
-    plt.savefig(f"plots/geometry.png")
 
 if __name__=='__main__':
     #drawPayload(incoming_wave=True, phi=30, theta=-80)
-    drawWavefrontPlanes(incoming_wave=True, phi=100, theta=-90)
+    drawWavefrontPlanes(incoming_wave=True, phi=45, theta=-25)

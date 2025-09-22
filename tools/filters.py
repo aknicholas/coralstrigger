@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-def Shannon_Whitaker(fs=3e9, plot=True):
+def Shannon_Whitaker(fs=4e9, plot=True):
     """
     Compute the frequency response of the Shannon–Whitaker FIR filter.
     Returns (freqs, H_mag_db, cutoff_freq).
@@ -51,4 +51,4 @@ def Shannon_Whitaker(fs=3e9, plot=True):
     return freqs, H_mag_db, cutoff_freq
 
 if __name__=="__main__":
-    Shannon_Whitaker(fs=3e9, plot=True)
+    Shannon_Whitaker(fs=4e9, plot=True)
