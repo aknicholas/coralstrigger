@@ -5,13 +5,7 @@ import tools.CoRaLs_geometry as aso_geometry
 from scipy import interpolate
 from scipy.signal import lfilter, butter, cheby1
 import matplotlib.pyplot as plt
-
-#def h_plane_vpol_beam_pattern():
-    
-ring_map = {
-    'B'  : 0,
-    'T'  : 1,}
-ring_map_inv = {v: k for k, v in ring_map.copy().items()}
+import coherent_sum
 
 def loadImpulse(filename='impulse/corals_impulse_sci.txt'):
 
@@ -20,31 +14,25 @@ def loadImpulse(filename='impulse/corals_impulse_sci.txt'):
     print(impulse.gimmeInfo(filename))
     return impulse
 
-def prepImpulse(impulse, upsample=10, filter=True, highpass_cutoff=0.28, lowpass_cutoff=1.10 ):
+def prepImpulse(impulse, upsample=10, filter=False, highpass_cutoff=0.28, lowpass_cutoff=1.10 ):
     '''
-    upsample, center, and filter impulse
-    highpass_cutoff [GHz]
+    Prepare impulse: zeropad and normalize.
+    
+    NOTE: Analog filtering removed - digital Shannon-Whitaker lowpass filter
+    will be applied after beamforming (matching hardware implementation).
+    
+    Args:
+        impulse: Waveform object
+        upsample: unused (kept for backward compatibility)
+        filter: unused (kept for backward compatibility) 
+        highpass_cutoff: unused (kept for backward compatibility)
+        lowpass_cutoff: unused (kept for backward compatibility)
     '''
     impulse.zeropad(4096)
-    #impulse.takeWindow([300, 1024+200])
     impulse.fft()
-    #impulse.upsampleFreqDomain(upsample)
     impulse.time = impulse.time-impulse.time[0]
     
-    if filter:
-        #highpass
-        filtercoeff = cheby1(4, rp=0.5, Wn=highpass_cutoff/impulse.freq[-1], btype='highpass')
-        impulse = waveform.Waveform(lfilter(filtercoeff[0], filtercoeff[1], impulse.voltage), 
-                                    time=impulse.time)
-        impulse.fft()
-        '''
-        #lowpass
-        filtercoeff = cheby1(4, rp=0.5, Wn=lowpass_cutoff/impulse.freq[-1], btype='lowpass')
-        impulse = waveform.Waveform(lfilter(filtercoeff[0], filtercoeff[1], impulse.voltage), 
-                                    time=impulse.time)
-        impulse.fft()
-        '''
-    #set Vpp = 1
+    # Set Vpp = 1 (normalize)
     impulse.voltage = impulse.voltage / (numpy.max(impulse.voltage) - numpy.min(impulse.voltage))
 
     #start = numpy.argmax(impulse.voltage)-3200
@@ -72,7 +60,6 @@ def beamPattern(plot=False, which_plane='E', which_pol='V', selected_az=None, se
     el = numpy.linspace(-90, 90, num_el)
     resp = 1 * numpy.ones((num_el, num_az))
     el_i = 0
-    az_i = 0
     while el_i < len(el):
         az_i = 0
         while az_i < len(az):
@@ -84,15 +71,19 @@ def beamPattern(plot=False, which_plane='E', which_pol='V', selected_az=None, se
 
     if which_plane == 'E':
         if which_pol == 'V':
+            # V-pol: E-plane is vertical (uses elevation angle)
             plane_interp = interpolate.interp1d(el, resp[:, int(num_az / 2)], kind='cubic')
         elif which_pol == 'H':
+            # H-pol: E-plane is horizontal (uses azimuth angle)
             plane_interp = interpolate.interp1d(az, resp[int(num_el / 2), :], kind='cubic')
     elif which_plane == 'E1':
         plane_interp = interpolate.interp1d(el, resp[:, int(num_az / 2)], kind='cubic')
     elif which_plane == 'H':
         if which_pol == 'V':
+            # V-pol: H-plane is horizontal (uses azimuth angle)
             plane_interp = interpolate.interp1d(az, resp[int(num_el / 2), :], kind='cubic')
         elif which_pol == 'H':
+            # H-pol: H-plane is vertical (uses elevation angle)
             plane_interp = interpolate.interp1d(el, resp[:, int(num_az / 2)], kind='cubic')
     elif which_plane == 'H1':
         plane_interp = interpolate.interp1d(el, resp[:, int(num_az / 2)], kind='cubic')
@@ -135,136 +126,46 @@ def dBtoVoltsAtten(db_value):
     atten_fraction = 10**(db_value/20)
     return atten_fraction
 
-def getRemappedDelays(phi, el, trigger_sectors):
+def getRemappedDelays(phi, el, antennas=None):
     '''
     converts delays from delays.getAllDelays(), from a dict to a numpy array
+    antennas: list of antenna indices (e.g., [0,1,2,3])
     '''
-    delay = delays.getAllDelays([phi], [el], phi_sectors=trigger_sectors) #gets delays at all antennas
-    delays_remapped = numpy.zeros((len(trigger_sectors), 4))
+    if antennas is None:
+        antennas = [0, 1, 2, 3]
+    
+    delay = delays.getAllDelays([phi], [el], antennas=antennas)
+    delays_remapped = numpy.zeros(len(antennas))
 
-    for i in delay[0]['delays']:
-
-        delays_remapped[i[0]-numpy.min(trigger_sectors),ring_map[i[1]]] = delay[0]['delays'][i]
+    for ant_idx, ant_name in enumerate([f'Ant{a+1}' for a in antennas]):
+        delays_remapped[ant_idx] = delay[0]['delays'][ant_name]
 
     return delays_remapped
 
 
-def getPayloadDelays(phi,el,trigger_sectors):
-    delay = delays.getAllDelays([phi], [el], phi_sectors=trigger_sectors) #gets delays at all antennas     
-    print(type(delay))
-    print(delay)
-    return delay_all
+def getPayloadWaveforms(phi, el, impulse, beam_pattern, antennas=None, snr=1, noise=None, plot=False, downsample=False):
 
-def getSinglePayloadWaveform(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, noise=None, plot=False, downsample=False):
-    delay = delays.getAllDelays([phi], [el], phi_sectors=trigger_sectors) #gets delays at all antennas     
-    #print(type(delay))
-    print("phi = " , delay[0]["phi"], " theta = ",   delay[0]["theta"])
-    #construct trigger_waves to keep the wfs that passed the trigger
-    trigger_waves=numpy.zeros((len(trigger_sectors), 4, len(impulse.voltage)))
-    #print("trigger waves.shape is: {}".format(trigger_waves.shape))
-
-    # the trigger waves isn't going to have the right shape now, because the code below expects each number index to be either a top or bottom, whereas corals doesn't have that kind of geometry
-
-    #I dont know what multiplier does here yet
-    multiplier=[]
+    if antennas is None:
+        antennas = [0, 1, 2, 3]
     
-    #not yet optimized for speed
-    for delay_i in delay[0]['delays']:
-        # calculate the phi and el and correct it to be within the interpolation range [(-90,90) or (-180,180)]
-        phi_interp = phi - aso_geometry.phi_ant[delay_i[0]-1]
-        # Wrap phi_interp to [-180, 180]
-        if phi_interp > 180:
-            phi_interp -= 360
-        elif phi_interp < -180:
-            phi_interp += 360
-        # this line below: trigger_waves elements are calculated based on beam_pattern which is a tuple of eplane,hplane interp functions. beam_pattern[1] is hplane and [0] is eplane
-        # hplane is evaluated with phi positions of antennas, and eplane is evaluated at el of antennas. The arguments to these are actually the "off-boresight" angle
-        # so the argument is an angle that is the difference of incoming wave and the antenna's angle tilt in phi and theta 
-        # the numpy.roll function will move the elements forward or backward along the axis, effectively forcing the delay to be taken into account for the impulse.
-        # roll the impulse.voltage which is scaled by 2*snr with the delay: int(numpy.round(delay[0]['delays'][delay_i] / impulse.dt))
-        # we also multiply that impulse.voltage that was rolled by the beam_pattern, b/c the antenna direction and the angle of the impulse wave should be taken into acct
-        # 
-        #trigger waves is calculated with 2 voltage fractions multiplied in, one from eplane and one from hplane. Trigger wave must be on both?
-        delay_i[0]-numpy.min(trigger_sectors)
-        trigger_waves[delay_i[0]-numpy.min(trigger_sectors),ring_map[delay_i[1]]] = \
-            numpy.roll(impulse.voltage * 2 * snr, int(numpy.round(delay[0]['delays'][delay_i] / impulse.dt)))
-        #print(impulse.time)
-        #there is a multiplier here that is hplane[dphi(phi)] and eplane[del(el)].
-        #multiplier.append(dBtoVoltsAtten(beam_pattern[1](phi-aso_geometry.phi_ant[delay_i[0]-1])) * \
-        #    dBtoVoltsAtten(beam_pattern[0](el -aso_geometry.theta_ant[0])))
-        
-        #add in the noise if its included.
-        if noise is not None:
-            print("noise shape " + str(noise.shape))
-            print("length of delay_i in payload signal is: {}".format(len(delay_i)))
-            print("length of ring map in payload signal is: {}".format(len(ring_map)))
-            trigger_waves[delay_i[0]-numpy.min(trigger_sectors),ring_map[delay_i[1]]] += \
-                                noise[(delay_i[0]-numpy.min(trigger_sectors))*len(ring_map) + ring_map[delay_i[1]]]
-
-    '''
-    #numpyfied waveform generation. Factor of 2 multipler since impulse Vpp putatively normalized to = 1.0
-    trigger_waves2 = numpy.roll(numpy.tile(impulse.voltage,len(trigger_sectors)*len(ring_map)).reshape((len(trigger_sectors)*len(ring_map), len(impulse.voltage))) 
-                                * 2 * snr, (numpy.round(delay2.flatten() / impulse.dt)).astype(numpy.int)).reshape((len(trigger_sectors), len(ring_map), len(impulse.voltage)))  
-    '''
-        
-    if downsample:
-        trigger_waves, impulse.time = downsamplePayload(impulse.time, trigger_waves)
-
-    print(impulse.time)
-
-    if plot:
-        fig, ax = plt.subplots(len(ring_map), len(trigger_sectors))
-        for i in range(len(trigger_sectors)):
-            for j in range(len(ring_map)):
-                if j != 0:
-                    ax[len(ring_map)-j-1,i].set_xticklabels([])
-                if i != 0:
-                    ax[len(ring_map)-j-1,i].set_yticklabels([])
-
-                ax[len(ring_map)-j-1,i].plot(impulse.time, trigger_waves[i,j], label=str(i)+ring_map_inv[j], c='black', lw=1, alpha=0.7)
-                #ax[len(ring_map)-j-1,i].plot(impulse.time, trigger_waves2[i,j],  c='black', lw=1, alpha=0.7)
-
-                ax[len(ring_map)-j-1,i].legend(loc='upper right')
-                #ax[len(ring_map)-j-1,i].set_ylim([-snr-1,snr+1])
-
-        plt.suptitle('phi = '+str(phi)+'deg.  theta = '+str(el)+'deg.', fontsize=20)
-        #plt.tight_layout()
-        plt.show()
+    delay = delays.getAllDelays([phi], [el], antennas=antennas)
     
-    return trigger_waves, impulse.time, multiplier
-
-def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, noise=None, plot=False, downsample=False):
-    '''
-    return waveforms for a single phi, el
-    waveforms is 3d (N,M,P) array, where N=number trigger_sectors, M=number of rings, P=size of impulse
-
-    typically, impulse is still upsampled here in order to align waveforms to a good 
-    approximation of the true phi, el
-    '''
-    delay = delays.getAllDelays([phi], [el], phi_sectors=trigger_sectors) #gets delays at all antennas
-    #delay2 = getRemappedDelays([phi], [el], trigger_sectors) #gets delays at all antennas
-    #print(type(delay))
-    #print(delay)
-    #construct trigger_waves to keep the wfs that passed the trigger
-    #print ('impulse voltage length: ', len(impulse.voltage))
-    trigger_waves=numpy.zeros((len(trigger_sectors), 4, len(impulse.voltage)))
-    #print ('impulse time length: ', len(impulse.time))
-    #print("trigger waves.shape is: {}".format(trigger_waves.shape))
+    # Construct trigger_waves: shape is [num_antennas, num_samples]
+    trigger_waves = numpy.zeros((len(antennas), len(impulse.voltage)))
+    
     print("phi = {:.2f}, theta = {:.2f}".format(round(delay[0]["phi"], 2), round(delay[0]["theta"], 2)))
-    #I dont know what multiplier does here yet
+    
+    # multiplier stores beam pattern attenuation for each antenna
     multiplier=[]
     
-    #not yet optimized for speed
-    for i in delay[0]['delays']:
-        #print("i[1] for delay is: {}".format(i[1]))
-        #print("ring map i[1] is: {}".format(ring_map[i[1]]))
-        #print("i[0] is {}".format(i[0]))
-        #print("numpy.min(trigger sectors) is: {}".format(numpy.min(trigger_sectors)))
-        #,ring_map[i[1]]
-        #print("argument to noise: {}".format((i[0]-numpy.min(trigger_sectors))*len(ring_map) + ring_map[i[1]]))
-
-        # calculate the phi and el and correct it to be within the interpolation range [(-90,90) or (-180,180)]
-        phi_interp = phi - aso_geometry.phi_ant[i[0]-1]
+    # Generate waveforms for each antenna
+    for ant_idx, ant_name in enumerate([f'Ant{a+1}' for a in antennas]):
+        # Get delay for this antenna
+        ant_delay = delay[0]['delays'][ant_name]
+        delay_samples = int(numpy.round(ant_delay / impulse.dt))
+        
+        # Calculate off-boresight angles relative to antenna's pointing direction
+        phi_interp = phi - aso_geometry.phi_ant[antennas[ant_idx]]
         # Wrap phi_interp to [-180, 180]
         if phi_interp > 180 and phi_interp < 360:
             phi_interp -= 360
@@ -275,8 +176,8 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
         elif phi_interp < -360:
             phi_interp += 540
         
-        el_interp = el - aso_geometry.theta_ant[i[0]-1]
-        # Wrap el_interp to [-180, 180]
+        el_interp = el - aso_geometry.theta_ant[antennas[ant_idx]]
+        # Wrap el_interp to [-90, 90]
         if el_interp > 90 and el_interp < 180:
             el_interp -= 180
         elif el_interp > 180:
@@ -285,38 +186,24 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
             el_interp += 180
         elif el_interp < -180:
             el_interp += 270
-        #print(el_interp)
-        #print(beam_pattern[0](el_interp))
-        #print('geometry adjusted phi for antenna located at ' + str(i[1]) + str(i[0]) + ' = ' + str(phi_interp))
-       
-        # this line below: trigger_waves elements are calculated based on beam_pattern which is a tuple of eplane,hplane interp functions. beam_pattern[1] is hplane and [0] is eplane
-        # hplane is evaluated with phi positions of antennas, and eplane is evaluated at el of antennas. The arguments to these are actually the "off-boresight" angle
-        # so the argument is an angle that is the difference of incoming wave and the antenna's angle tilt in phi and theta 
-        # the numpy.roll function will move the elements forward or backward along the axis, effectively forcing the delay to be taken into account for the impulse.
-        # roll the impulse.voltage which is scaled by 2*snr with the delay: int(numpy.round(delay[0]['delays'][i] / impulse.dt))
-        # we also multiply that impulse.voltage that was rolled by the beam_pattern, b/c the antenna direction and the angle of the impulse wave should be taken into acct
-        # 
-        #trigger waves is calculated with 2 voltage fractions multiplied in, one from eplane and one from hplane. Trigger wave must be on both?
-        #print("roll argument as integer for this trigger-wave-delay: {}".format(int(numpy.round(delay[0]['delays'][i] / impulse.dt))))
-        trigger_waves[i[0]-numpy.min(trigger_sectors),ring_map[i[1]]] = \
-            numpy.roll(impulse.voltage * 2 * snr, int(numpy.round(delay[0]['delays'][i] / impulse.dt))) * \
+        
+        # Apply delayed impulse with beam pattern attenuation
+        # beam_pattern[0] = E-plane response (elevation dependent)
+        # beam_pattern[1] = H-plane response (azimuth dependent)
+        # Currently both are multiplied together into a single waveform
+        trigger_waves[ant_idx] = \
+            numpy.roll(impulse.voltage * 2 * snr, delay_samples) * \
             dBtoVoltsAtten(beam_pattern[1](phi_interp)) * \
             dBtoVoltsAtten(beam_pattern[0](el_interp))
-        #print('Theta ' + str(aso_geometry.theta_ant[i[0]-1]))
-        #print('Attenuation factor is ' + str(dBtoVoltsAtten(beam_pattern[1](phi_interp)) * \
-        #    dBtoVoltsAtten(beam_pattern[0](el - aso_geometry.theta_ant[i[0]-1]))))
-        #there is a multiplier here that is hplane[dphi(phi)] and eplane[del(el)].
-        multiplier.append(dBtoVoltsAtten(beam_pattern[1](phi_interp)) * \
-            dBtoVoltsAtten(beam_pattern[0](el - aso_geometry.theta_ant[i[0]-1])))
         
-
-        #add in the noise if its included.
+        # Store combined beam pattern attenuation
+        multiplier.append(dBtoVoltsAtten(beam_pattern[1](phi_interp)) * \
+            dBtoVoltsAtten(beam_pattern[0](el - aso_geometry.theta_ant[antennas[ant_idx]])))
+        
+        # Add noise if provided
         if noise is not None:
             print("noise shape " + str(noise.shape))
-            print("length of i in payload signal is: {}".format(len(i)))
-            print("length of ring map in payload signal is: {}".format(len(ring_map)))
-            trigger_waves[i[0]-numpy.min(trigger_sectors),ring_map[i[1]]] += \
-                                noise[(i[0]-numpy.min(trigger_sectors))*len(ring_map) + ring_map[i[1]]]
+            trigger_waves[ant_idx] += noise[ant_idx]
 
     '''
     #numpyfied waveform generation. Factor of 2 multipler since impulse Vpp putatively normalized to = 1.0
@@ -390,187 +277,551 @@ def getPayloadWaveforms(phi, el, trigger_sectors, impulse, beam_pattern, snr=1, 
 
     return trigger_waves, timebase, multiplier
 
-def downsamplePayload(time, trigger_waves):
+def getPayloadWaveforms_dualpol(phi, el, impulse, beam_patterns_h, beam_patterns_v, 
+                                antennas=None, snr=1, noise=None, 
+                                psi=45.0, plot=False):
+    # Default 4 physical antennas if not specified
+    if antennas is None:
+        antennas = [0, 1, 2, 3]
+    
+    n_antennas = len(antennas)
+    n_samples = len(impulse.voltage)
+    
+    # Compute polarization projection coefficients
+    # For linear polarization at angle psi from H-pol axis:
+    psi_rad = numpy.deg2rad(psi)
+    pol_h = numpy.cos(psi_rad)  # Projection onto H-pol channel
+    pol_v = numpy.sin(psi_rad)  # Projection onto V-pol channel
+    
+    # Threshold very small coefficients to exactly zero (avoid floating point precision issues)
+    if numpy.abs(pol_h) < 1e-10:
+        pol_h = 0.0
+    if numpy.abs(pol_v) < 1e-10:
+        pol_v = 0.0
+    
+    # Initialize output array for all 8 channels
+    waveforms = numpy.zeros((8, n_samples))
+    multipliers = numpy.zeros(8)
+    
+    # Get geometric delays (same for both polarizations at each location)
+    delay = delays.getAllDelays([phi], [el], antennas=antennas)
+    
+    print("phi = {:.2f}, theta = {:.2f}".format(round(delay[0]["phi"], 2), round(delay[0]["theta"], 2)))
+    
+    # Generate waveforms for each physical location
+    for ant_idx, ant_num in enumerate(antennas):
+        # Get delay for this antenna
+        ant_name = f'Ant{ant_num+1}'
+        ant_delay = delay[0]['delays'][ant_name]
+        delay_samples = int(numpy.round(ant_delay / impulse.dt))
+        
+        # All antennas of same polarization have identical beam patterns
+        # (phi_ant and theta_ant are polarization axes, not pointing directions)
+        # The geometric delay differences already account for antenna positions
+        
+        # For beam pattern: use raw sky angles (all antennas point same direction)
+        phi_interp = numpy.clip(phi, -180, 180)
+        theta_interp = numpy.clip(el, -90, 90)
+        
+        # H-polarization waveform (channels 0-3, aligned at phi=0°)
+        # H-pol: E-plane spans azimuth (narrow), H-plane spans elevation (wide)
+        waveforms[ant_num] = numpy.roll(impulse.voltage * 2 * snr, delay_samples) * \
+            pol_h * \
+            dBtoVoltsAtten(beam_patterns_h[0](phi_interp)) * \
+            dBtoVoltsAtten(beam_patterns_h[1](theta_interp))
+        
+        # Store H-pol beam attenuation
+        multipliers[ant_num] = pol_h * \
+            dBtoVoltsAtten(beam_patterns_h[0](phi_interp)) * \
+            dBtoVoltsAtten(beam_patterns_h[1](theta_interp))
+        
+        # V-polarization waveform (channels 4-7, aligned at phi=90°)
+        # V-pol: E-plane spans elevation (narrow), H-plane spans azimuth (wide)
+        # Pattern indices are swapped because antenna is rotated 90°
+        waveforms[ant_num + 4] = numpy.roll(impulse.voltage * 2 * snr, delay_samples) * \
+            pol_v * \
+            dBtoVoltsAtten(beam_patterns_v[0](theta_interp)) * \
+            dBtoVoltsAtten(beam_patterns_v[1](phi_interp))
+        
+        # Store V-pol beam attenuation
+        multipliers[ant_num + 4] = pol_v * \
+            dBtoVoltsAtten(beam_patterns_v[0](theta_interp)) * \
+            dBtoVoltsAtten(beam_patterns_v[1](phi_interp))
+        
+        # Add noise if provided
+        if noise is not None:
+            waveforms[ant_num] += noise[ant_idx]
 
+
+    timebase = impulse.time
+    
+    if plot:
+        # Create side-by-side plots for H-pol and V-pol
+        fig, axes = plt.subplots(n_antennas, 2, figsize=(12, 3*n_antennas))
+        
+        for ant_idx in range(n_antennas):
+            # H-pol plot
+            axes[ant_idx, 0].plot(timebase, waveforms_h[ant_idx], 'b-', lw=0.8)
+            axes[ant_idx, 0].set_title(f"Ant {antennas[ant_idx]} H-pol")
+            axes[ant_idx, 0].set_ylabel("Voltage")
+            axes[ant_idx, 0].grid(True, alpha=0.3)
+            
+            # V-pol plot
+            axes[ant_idx, 1].plot(timebase, waveforms_v[ant_idx], 'r-', lw=0.8)
+            axes[ant_idx, 1].set_title(f"Ant {antennas[ant_idx]} V-pol")
+            axes[ant_idx, 1].grid(True, alpha=0.3)
+        
+        axes[-1, 0].set_xlabel("Time [ns]")
+        axes[-1, 1].set_xlabel("Time [ns]")
+        fig.suptitle(f"Dual-Pol Waveforms: φ = {phi}°, θ = {el}°", fontsize=16)
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.savefig("plots/dualpol_waveforms.png", dpi=150)
+        plt.show()
+    
+    return waveforms, timebase, multipliers
+
+def downsamplePayload(time, trigger_waves):
+    '''
+    Downsample waveforms from upsampled rate to RITC sampling rate (250 ps)
+    
+    Args:
+        time: time array (ns)
+        trigger_waves: (num_antennas, num_samples) array
+    
+    Returns:
+        downsampled trigger_waves and time arrays
+    '''
     decimate_factor = int(aso_geometry.ritc_sample_step/((time[1]-time[0])))
     #print('decimate factor in downsamplePayload = ' ,decimate_factor)
     #print('time length pre decimation ', len(time))
-    trigger_waves = trigger_waves[:,:,::decimate_factor]
+    trigger_waves = trigger_waves[:,::decimate_factor]  # Updated for 2D array [antennas, samples]
     time = time[::decimate_factor]
     #print('time length post decimation ', len(time))
-    #print('trigger_waves length post decimation ', len(trigger_waves[0][0]))
-    return trigger_waves, time                                  
+    #print('trigger_waves length post decimation ', len(trigger_waves[0]))
+    return trigger_waves, time
 
-def gimmePlotsOriginal(impulse):
-            impulse.fft()
-            plt.figure(1)
-            plt.plot(impulse.time_zeroed, impulse.voltage, '-.', ms=2)
-            plt.title("time domain?") 
-            plt.figure(2)
-            plt.plot(impulse.freq, numpy.abs(impulse.ampl), '-.', ms=2)
-            impulse.upsampleFreqDomain(2)
-            plt.figure(1)
-            plt.plot(impulse.time_zeroed, impulse.voltage, '--', ms=1)
-            #plt.xlim([0,60])
-            plt.figure(2)
-            plt.plot(impulse.freq, numpy.abs(impulse.ampl), '--', ms=1)   
-            #plt.xlim([0,3])
-            plt.title("frequency?") 
-            #plt.figure(4)
-            #plt.plot(impulse.time, numpy.correlate(impulse.voltage, impulse.voltage, "same"))
-            plt.show()
-
-
-def gimmePlots(impulse,impulse2):
-            impulse.fft()
-            impulse2.fft()
-            plt.figure(1)
-            plt.plot(impulse.time_zeroed, impulse.voltage, '-.', ms=2)
-            plt.title("time domain?") 
-            plt.figure(2)
-            plt.plot(impulse.freq, numpy.abs(impulse.ampl), '-.', ms=2)
-            #impulse.upsampleFreqDomain(2)
-            plt.figure(1)
-            plt.plot(impulse2.time, impulse2.voltage, '--', ms=1)
-            #plt.xlim([0,60])
-            plt.figure(2)
-            plt.plot(impulse2.freq, numpy.abs(impulse2.ampl), '--', ms=1)   
-            #plt.xlim([0,3])
-            plt.title("frequency?") 
-            #plt.figure(4)
-            #plt.plot(impulse.time, numpy.correlate(impulse.voltage, impulse.voltage, "same"))
-            plt.show()
-
-def gimmePlotsImpulse(impulse):
-    impulse.fft()
-    plt.figure(1)
-    plt.plot(impulse.time_zeroed, impulse.voltage, '-.', ms=2)
-    plt.title("Time Domain")
-    plt.xlabel("Time [ns]")
-    plt.ylabel("Voltage [V]")
-
-    plt.figure(2)
-    impulse.fft()  # Ensure FFT is up to date
-    abs_fft = numpy.abs(impulse.ampl)
-    eps = 1e-20
-
-    y_vals = 20 * numpy.log10((abs_fft + eps) / (numpy.max(abs_fft) + eps)) + 3
-    # Find the maximum frequency where y > -80 dB
-    valid_indices = numpy.where(y_vals > -80)[0]
-    if valid_indices.size > 0:
-        max_freq = impulse.freq[valid_indices[-1]] 
-    else:
-        max_freq = 2  # fallback if all values are below -80 dB
-
-    plt.plot(impulse.freq, y_vals, '-.', ms=2)
-    plt.title("Frequency Domain")
-    plt.xlabel("Frequency [GHz]")
-    plt.ylabel("Amplitude [dB]")
-    plt.xlim([0, max_freq])
-    plt.ylim([-80, 5])
-    plt.show()
-
-def gimmePlots2Impulses(impulse,impulse2):
-            impulse.fft()
-            impulse2.fft()
-            fig, ax1 = plt.subplots()
-            ax1.plot(impulse.time_zeroed, impulse.voltage, '-.', ms=2,color='red')
-            fig.suptitle("time domain?") 
-            ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
-            ax2.plot(impulse2.time, impulse2.voltage, '--', ms=1,color='blue')
-            #ax1.set_ylim([-0.5,0.5])
-            #ax2.set_ylim([-100,100])
-            figB, ax1B = plt.subplots()
-            ax1B.plot(impulse.freq, numpy.abs(impulse.ampl), '-.', ms=2,color='red')
-            ax2B = ax1B.twinx()  # instantiate a second axes that shares the same x-axis
-            ax2B.plot(impulse2.freq, numpy.abs(impulse2.ampl), '--', ms=1,color='blue')   
-            #plt.xlim([0,3])
-            figB.suptitle("frequency?") 
-            #plt.figure(4)
-            #plt.plot(impulse.time, numpy.correlate(impulse.voltage, impulse.voltage, "same"))
-            plt.show()
-
-
-def loadPlaneWave(freq_i=100*10**6):
-           # testing sample rate in waveform init
-    N_samples=4096
-    #freq_i=100*10**6 # 100 MHz
-    omega=2*numpy.pi*freq_i
-    #now omega*t is the argument in the sine wave, so we can get real_times from this
-    period=1/freq_i
-    print("period: {}".format(period))
-    # how many periods do you measure for, a random number maybe?
-    rng = numpy.random.default_rng()
-    num_periods=1+(rng.random()*3)
-    print("plotting {} seconds of wave ".format(period*num_periods))
-
-    # need sampling rate now...
-    sampling_period= 3*10**(-10)# lets do 500MHz or 50Mega samples / sec
-    times=numpy.linspace(0,N_samples*sampling_period,N_samples)
-    #print(times)
-    volty=numpy.sin(omega*times)
-    real_times=numpy.linspace(0,N_samples*sampling_period,int(100*N_samples))
-    #print(real_times[-1])
-    real_volty=numpy.sin(omega*real_times)
-    reaL_siney=waveform.Waveform(real_volty,real_times*10**9) # what is the sampling rate now? if we had 4096 samples in 2 periods of a 100MHz sine wave then 
-
-    #real_times=numpy.linspace(0,period,N_samples)
-    #siney=waveform.Waveform(volty, sampling_rate=(sampling_period)) # what is the sampling rate now? if we had 4096 samples in 2 periods of a 100MHz sine wave then 
-    siney=waveform.Waveform(volty, times*10**9) # what is the sampling rate now? if we had 4096 samples in 2 periods of a 100MHz sine wave then 
-
-    #plt.scatter(siney.time,siney.voltage, label='waveform')
-    plt.scatter(reaL_siney.time,reaL_siney.voltage, label='real wave')
-    plt.scatter(siney.time,siney.voltage, label='sampled wave')
-
-    #plt.scatter(siney.time,siney.voltage, label='sampled wave')
-    plt.grid(True)
-    plt.legend(loc='upper right')
-    plt.xlabel('Time [ns]')
-    plt.ylabel('Voltage')
-    #plt.xlim([0,period*10**9])
-    plt.title("waveform for sine wave")
-    plt.show()
-    return siney
-
-if __name__=="__main__":
+if __name__ =='__main__':
+    import matplotlib.pyplot as plt
+    import sys
+    sys.path.insert(0, '../')
+    import coherent_sum as csum
+    import tools.filters as filters
     
-    import noise
-    # for corals, the beamPatterns get more complex, so we need to break apart to multiple calls
-    eplane = beamPattern(plot=False,which_plane='E',which_pol='V')
-    hplane = beamPattern(plot=False,which_plane='H',which_pol='V')
-    #load new corals lpda impulse
-    impulse = loadImpulse('impulse/corals_impulse.txt')
+    # Test configuration
+    phi = 20
+    el = 10
+    psi = 45  # 45° = equal H and V projection
+    
+    print("\n" + "="*70)
+    print("DUAL-POL SIGNAL PROCESSING CHAIN")
+    print("="*70)
+    print(f"Sky direction: phi={phi}°, theta={el}°")
+    print(f"Polarization: psi={psi}° (0=H-pol, 90=V-pol)")
+    print("="*70 + "\n")
+    
+    # ========== STEP 1: RAW IMPULSE ==========
+    print("STEP 1: Load raw impulse response")
+    impulse = loadImpulse()
     impulse = prepImpulse(impulse)
-    print("length of file is: {} ".format(impulse.n))
-    trigger_sectors_phi=[1,2,3,4,5,6,7,8]
-    thermal_noise = noise.ThermalNoise(0.28, .95, filter_order=(10,10), v_rms=1.0, 
-                                       fbins=len(impulse.voltage), 
-                                       time_domain_sampling_rate=impulse.dt)
-
-    noise = thermal_noise.makeNoiseWaveform(ntraces=len(trigger_sectors_phi) * len(ring_map))
-    #plot a boresight SNR of 5
-    #waveform is incoming at phi and el, so maybe better if beam pattern is 2D now?
-    #this worked in some way
-    #getPayloadWaveforms(22.5, -25, [1,2,3,4], impulse, (eplane, hplane), snr=5, noise=numpy.real(noise[2]), plot=True)
-    #try more channels?
-    #phi sectors
-    #plot needs to make phi sectors use Corals geometry class, not use just ring_map where it assumes there is a top and bottom antenna at every phi...
-    #trigger_sectors_phi=[1,2,3,4]
-
-    #print(len(trigger_sectors_phi))
+    print(f"  Impulse: {len(impulse.voltage)} samples, dt={impulse.dt:.6f} ns")
+    print(f"  Vpp = {numpy.max(impulse.voltage) - numpy.min(impulse.voltage):.3f} (normalized)")
     
-    #getSinglePayloadWaveform(22.5, -25, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, plot=True)
-    print("BEGIN getPayloadWaveforms")
-    #getPayloadWaveforms(22.5, -25, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, noise=numpy.real(noise[2]), plot=True)
-    #try without noise and just plane wave as impulse
+    # ========== STEP 2: ANTENNA WAVEFORMS (TIME DOMAIN - REAL) ==========
+    print("\nSTEP 2: Generate antenna waveforms with beam patterns and delays")
+    eplane_h = beamPattern(plot=False, which_plane='E', which_pol='H')
+    hplane_h = beamPattern(plot=False, which_plane='H', which_pol='H')
+    eplane_v = beamPattern(plot=False, which_plane='E', which_pol='V')
+    hplane_v = beamPattern(plot=False, which_plane='H', which_pol='V')
+    beam_patterns_h = (eplane_h, hplane_h)
+    beam_patterns_v = (eplane_v, hplane_v)
     
-    getPayloadWaveforms(0, -45, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, plot=True, downsample=True)
-    print(impulse.time)
-    #getPayloadWaveforms(45, -45, trigger_sectors_phi, impulse, (eplane, hplane), snr=5, noise=numpy.real(noise[2]), plot=True)
+    waveforms, timebase, multipliers = getPayloadWaveforms_dualpol(
+        phi, el, impulse, beam_patterns_h, beam_patterns_v, 
+        antennas=[0, 1, 2, 3], snr=5, noise=None, 
+        psi=psi, plot=False
+    )
+    print(f"  Generated 8 channels (4 H-pol + 4 V-pol)")
+    print(f"  All waveforms are REAL voltages (physical measurements)")
+    print(f"  Beam multipliers (pol × beam pattern):")
+    print(f"    H-pol: {multipliers[0]:.4f}, {multipliers[1]:.4f}, {multipliers[2]:.4f}, {multipliers[3]:.4f}")
+    print(f"    V-pol: {multipliers[4]:.4f}, {multipliers[5]:.4f}, {multipliers[6]:.4f}, {multipliers[7]:.4f}")
+    
+    # ========== STEP 3: COHERENT SUM (TIME DOMAIN - REAL) ==========
+    print("\nSTEP 3: Coherent sum with geometric delays")
+    delays_ns = getRemappedDelays(phi, el, antennas=[0, 1, 2, 3])
+    delays_q = numpy.round(delays_ns / aso_geometry.ritc_sample_step) * aso_geometry.ritc_sample_step
+    print(f"  Delays: {delays_ns}")
+    print(f"  Quantized: {delays_q}")
+    
+    # Get pre-digitization coherent sums for visualization (STEP 3)
+    coh_h, coh_v, tb = csum.coherentSum_dualpol(
+        waveforms[:4], waveforms[4:], timebase, delays_q,
+        downsample=False, channel_mask=[1,1,1,1], output='separate', apply_filter=False
+    )
+    print(f"✓ Step 3: Coherent sum (pre-digitization)")
+    print(f"  H-sum: max={numpy.max(numpy.abs(coh_h)):.3e} V")
+    print(f"  V-sum: max={numpy.max(numpy.abs(coh_v)):.3e} V")
+    print(f"  Sampling rate: {1/(tb[1]-tb[0])*1e-9/1e9:.3f} GHz")
+    
+    # ========== STEPS 4-10: DIGITIZE, FILTER, AND CIRCULAR DECOMPOSITION ==========
+    # Use coherentSum_dualpol() with hardware-correct signal chain and return intermediates
+    print("\n✓ Steps 4-10: Hardware signal chain (digitize → filter → sum → circular)")
+    lhcp, rhcp, tb_digitized, inter = csum.coherentSum_dualpol(
+        waveforms[:4], waveforms[4:], timebase, delays_q,
+        downsample=True, channel_mask=[1,1,1,1], output='circular',
+        apply_filter=True, digitize_first=True, return_intermediates=True
+    )
+    
+    # Extract intermediate values for visualization
+    coh_h_digitized = inter['coh_h_digitized']
+    coh_v_digitized = inter['coh_v_digitized']
+    coh_h_filtered = inter['coh_h_filtered']
+    coh_v_filtered = inter['coh_v_filtered']
+    H_fft = inter['H_fft']
+    V_fft = inter['V_fft']
+    V_shifted = inter['V_shifted']
+    LHCP_fft = inter['LHCP_fft']
+    RHCP_fft = inter['RHCP_fft']
+    freqs = inter['freqs']
+    decimate_factor = inter['decimate_factor']
+    fs_adc = inter['fs_adc']
+    dt_adc = (tb_digitized[1] - tb_digitized[0]) * 1e-9  # ns to s
+    
+    # Compute unfiltered FFTs for comparison
+    H_fft_unfilt = numpy.fft.rfft(coh_h_digitized)
+    V_fft_unfilt = numpy.fft.rfft(coh_v_digitized)
+    
+    # Get filter coefficients for visualization
+    filter_coeffs = filters.get_Shannon_Whitaker_coeffs(fs=4e9)
+    nfft_filter = 4096
+    filter_fft_plot = numpy.fft.rfft(filter_coeffs, n=nfft_filter)
+    freqs_filter = numpy.fft.rfftfreq(nfft_filter, d=dt_adc)
+    filter_response_db = 20*numpy.log10(numpy.abs(filter_fft_plot) / numpy.max(numpy.abs(filter_fft_plot)))
+    
+    # Compute power spectra
+    power_lhcp_freq = numpy.abs(LHCP_fft)**2
+    power_rhcp_freq = numpy.abs(RHCP_fft)**2
+    power_total_freq = power_lhcp_freq + power_rhcp_freq
+    
+    # Print summary
+    print(f"  Decimation: {decimate_factor}×")
+    print(f"  ADC rate: {fs_adc/1e9:.3f} GHz")
+    print(f"  Digitized samples: {len(coh_h_digitized)}")
+    print(f"  H-pol max: {numpy.max(numpy.abs(coh_h_digitized)):.3e} V")
+    print(f"  V-pol max: {numpy.max(numpy.abs(coh_v_digitized)):.3e} V")
+    print(f"  LHCP power: {numpy.sum(power_lhcp_freq):.3e}")
+    print(f"  RHCP power: {numpy.sum(power_rhcp_freq):.3e}")
+    print(f"  Pol ratio: {numpy.sum(power_lhcp_freq)/numpy.sum(power_rhcp_freq):.3f}")
+    
+    # ========== VISUALIZATION (all intermediates now available) ==========
+    # Note: lhcp and rhcp are already time-domain signals (REAL) from irfft
+    print("\n✓ Step 10: IFFT already computed by coherentSum_dualpol()")
+    print(f"  lhcp and rhcp are REAL time-domain signals")
+    print(f"  These are reconstructed waveforms from circular spectra")
+    print(f"  Power = signal^2")
+    
+    # ========================================================================
+    # CREATE COMPREHENSIVE DIAGNOSTIC PLOT
+    # ========================================================================
+    
+    fig = plt.figure(figsize=(32, 22))
+    gs = fig.add_gridspec(6, 4, hspace=0.5, wspace=0.4)
+    
+    # Row 1: Time-domain antenna signals (REAL)
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.plot(timebase, impulse.voltage, 'k-', linewidth=1.5)
+    ax1.set_title('1. Raw Impulse (REAL)', fontweight='bold')
+    ax1.set_xlabel('Time [ns]')
+    ax1.set_ylabel('Voltage [V]')
+    ax1.grid(True, alpha=0.3)
+    ax1.text(0.02, 0.98, 'Time Domain\nPhysical Voltage', 
+             transform=ax1.transAxes, va='top', fontsize=9,
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    ax2 = fig.add_subplot(gs[0, 1])
+    for i in range(4):
+        ax2.plot(timebase, waveforms[i], label=f'Ch{i}', alpha=0.6)
+    ax2.set_title('2a. H-pol Antennas (REAL)', fontweight='bold')
+    ax2.set_xlabel('Time [ns]')
+    ax2.set_ylabel('Voltage [V]')
+    ax2.legend(loc='upper right', fontsize=8)
+    ax2.grid(True, alpha=0.3)
+    
+    ax3 = fig.add_subplot(gs[0, 2])
+    for i in range(4):
+        ax3.plot(timebase, waveforms[i+4], label=f'Ch{i+4}', alpha=0.6)
+    ax3.set_title('2b. V-pol Antennas (REAL)', fontweight='bold')
+    ax3.set_xlabel('Time [ns]')
+    ax3.set_ylabel('Voltage [V]')
+    ax3.legend(loc='upper right', fontsize=8)
+    ax3.grid(True, alpha=0.3)
+    
+    ax4 = fig.add_subplot(gs[0, 3])
+    ax4.plot(tb, coh_h.real, 'b-', linewidth=2, label='H')
+    ax4.plot(tb, coh_v.real, 'r-', linewidth=2, label='V')
+    ax4.set_title('3. Coherent Sum (REAL)', fontweight='bold')
+    ax4.set_xlabel('Time [ns]')
+    ax4.set_ylabel('Voltage [V]')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    ax4.text(0.02, 0.98, f'{1/(tb[1]-tb[0]):.1f} GHz sampling', 
+             transform=ax4.transAxes, va='top', fontsize=8,
+             bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5))
+    
+    # Row 2: Digitization and filtering
+    ax5 = fig.add_subplot(gs[1, 0])
+    ax5.plot(tb_digitized, coh_h_digitized, 'b-', linewidth=1.5, alpha=0.7, label='H digitized')
+    ax5.plot(tb_digitized, coh_v_digitized, 'r-', linewidth=1.5, alpha=0.7, label='V digitized')
+    ax5.set_title('4. Digitized @ 4 GHz (REAL)', fontweight='bold')
+    ax5.set_xlabel('Time [ns]')
+    ax5.set_ylabel('Voltage [V]')
+    ax5.legend(fontsize=8)
+    ax5.grid(True, alpha=0.3)
+    ax5.text(0.02, 0.98, f'ADC: {fs_adc/1e9:.1f} GHz\nDecimate: 1/{decimate_factor}', 
+             transform=ax5.transAxes, va='top', fontsize=8,
+             bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.5))
+    
+    ax7 = fig.add_subplot(gs[1, 1])
+    # Show filter response
+    ax7.plot(freqs_filter/1e9, filter_response_db, 'k-', linewidth=2)
+    ax7.axhline(-3, color='red', linestyle='--', alpha=0.7, label='-3 dB')
+    ax7.set_title('5a. Filter Frequency Response', fontweight='bold')
+    ax7.set_xlabel('Frequency [GHz]')
+    ax7.set_ylabel('Gain [dB]')
+    ax7.set_xlim([0, 2])
+    ax7.set_ylim([-60, 5])
+    ax7.legend()
+    ax7.grid(True, alpha=0.3)
+    ax7.text(0.5, 0.8, f'Cutoff: ~1.1 GHz', 
+             transform=ax7.transAxes, ha='center', fontsize=9,
+             bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
+    
+    ax8 = fig.add_subplot(gs[1, 2])
+    # Normalize filtered and unfiltered to same reference to see attenuation
+    H_max_ref = numpy.max(numpy.abs(H_fft_unfilt))
+    V_max_ref = max(numpy.max(numpy.abs(V_fft_unfilt)), 1e-20)  # Avoid division by zero
+    
+    # Plot unfiltered (faded) and filtered on same scale
+    H_unfilt_db = 20*numpy.log10((numpy.abs(H_fft_unfilt) + 1e-20)/H_max_ref)
+    H_filt_db = 20*numpy.log10((numpy.abs(H_fft) + 1e-20)/H_max_ref)
+    V_unfilt_db = 20*numpy.log10((numpy.abs(V_fft_unfilt) + 1e-20)/V_max_ref)
+    V_filt_db = 20*numpy.log10((numpy.abs(V_fft) + 1e-20)/V_max_ref)
+    
+    ax8.plot(freqs/1e9, H_unfilt_db, 'b:', linewidth=1, label='H unfiltered', alpha=0.4)
+    ax8.plot(freqs/1e9, H_filt_db, 'b-', linewidth=2, label='H filtered', alpha=0.9)
+    ax8.plot(freqs/1e9, V_unfilt_db, 'r:', linewidth=1, label='V unfiltered', alpha=0.4)
+    ax8.plot(freqs/1e9, V_filt_db, 'r-', linewidth=2, label='V filtered', alpha=0.9)
+    # Overlay filter response (scaled to fit on same axes)
+    ax8.plot(freqs_filter/1e9, filter_response_db, 'k--', linewidth=1.5, label='Filter', alpha=0.7)
+    ax8.set_title('5b. FFT: Before/After Filtering', fontweight='bold')
+    ax8.set_xlabel('Frequency [GHz]')
+    ax8.set_ylabel('Magnitude [dB]')
+    ax8.set_xlim([0, 2])
+    ax8.set_ylim([-60, 5])
+    ax8.legend(fontsize=7, loc='upper right')
+    ax8.grid(True, alpha=0.3)
+    
+    ax6 = fig.add_subplot(gs[1, 3])
+    ax6.plot(tb_digitized, coh_h_filtered, 'b-', linewidth=1.5, label='H filtered')
+    ax6.plot(tb_digitized, coh_v_filtered, 'r-', linewidth=1.5, label='V filtered')
+    ax6.set_title('6. Filtered (FIR) (REAL)', fontweight='bold')
+    ax6.set_xlabel('Time [ns]')
+    ax6.set_ylabel('Voltage [V]')
+    ax6.legend(fontsize=8)
+    ax6.grid(True, alpha=0.3)
+    ax6.text(0.5, 0.5, 'Shannon-Whitaker\n33-tap FIR', 
+             transform=ax6.transAxes, ha='center', va='center', fontsize=10,
+             bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
+    
+    # Row 3: FFT spectra for H and V polarizations
+    ax_hfft = fig.add_subplot(gs[2, 0])
+    ax_hfft.plot(freqs/1e9, 20*numpy.log10(numpy.abs(H_fft)/numpy.max(numpy.abs(H_fft))), 'b-', linewidth=2)
+    ax_hfft.set_title('6a. H-pol FFT Spectrum', fontweight='bold')
+    ax_hfft.set_xlabel('Frequency [GHz]')
+    ax_hfft.set_ylabel('Magnitude [dB]')
+    ax_hfft.set_xlim([0, 2])
+    ax_hfft.set_ylim([-60, 5])
+    ax_hfft.grid(True, alpha=0.3)
+    ax_hfft.text(0.5, 0.9, 'FFT(H filtered)', 
+                 transform=ax_hfft.transAxes, ha='center', fontsize=9,
+                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+    
+    ax_vfft = fig.add_subplot(gs[2, 1])
+    if numpy.max(numpy.abs(V_fft)) > 1e-10:  # Only plot if V has signal
+        ax_vfft.plot(freqs/1e9, 20*numpy.log10(numpy.abs(V_fft)/numpy.max(numpy.abs(V_fft))), 'r-', linewidth=2)
+    else:
+        ax_vfft.axhline(0, color='gray', linestyle='--', alpha=0.5)
+        ax_vfft.text(0.5, 0.5, 'No V-pol signal\n(psi=0°)', 
+                     transform=ax_vfft.transAxes, ha='center', va='center',
+                     fontsize=12, bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.7))
+    ax_vfft.set_title('6b. V-pol FFT Spectrum', fontweight='bold')
+    ax_vfft.set_xlabel('Frequency [GHz]')
+    ax_vfft.set_ylabel('Magnitude [dB]')
+    ax_vfft.set_xlim([0, 2])
+    ax_vfft.set_ylim([-60, 5])
+    ax_vfft.grid(True, alpha=0.3)
+    if numpy.max(numpy.abs(V_fft)) > 1e-10:
+        ax_vfft.text(0.5, 0.9, 'FFT(V filtered)', 
+                     transform=ax_vfft.transAxes, ha='center', fontsize=9,
+                     bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.5))
+    
+    # Row 4: Phase shift and circular decomposition
+    ax9 = fig.add_subplot(gs[3, 0])
+    # Phase of V before and after shift
+    phase_V = numpy.angle(V_fft)
+    phase_V_shifted = numpy.angle(V_shifted)
+    ax9.plot(freqs/1e9, phase_V, 'r-', alpha=0.5, label='V filtered')
+    ax9.plot(freqs/1e9, phase_V_shifted, 'r-', linewidth=2, label='V × j (π/2 shift)')
+    ax9.set_title('7. Phase Shift (V-pol)', fontweight='bold')
+    ax9.set_xlabel('Frequency [GHz]')
+    ax9.set_ylabel('Phase [rad]')
+    ax9.set_xlim([0, 2])
+    ax9.legend(fontsize=8)
+    ax9.grid(True, alpha=0.3)
+    ax9.text(0.5, 0.5, 'Multiply by j\n= +90° phase', 
+             transform=ax9.transAxes, ha='center', va='center', fontsize=10,
+             bbox=dict(boxstyle='round', facecolor='orange', alpha=0.5))
+    
+    ax10 = fig.add_subplot(gs[3, 1])
+    ax10.plot(freqs/1e9, 20*numpy.log10(numpy.abs(LHCP_fft)/numpy.max(numpy.abs(LHCP_fft))), 'b-', linewidth=2)
+    ax10.set_title('8a. LHCP Spectrum', fontweight='bold')
+    ax10.set_xlabel('Frequency [GHz]')
+    ax10.set_ylabel('Magnitude [dB]')
+    ax10.set_xlim([0, 2])
+    ax10.grid(True, alpha=0.3)
+    ax10.text(0.5, 0.9, 'LHCP = (H + j×V)/√2', 
+             transform=ax10.transAxes, ha='center', fontsize=9,
+             bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+    
+    ax11 = fig.add_subplot(gs[3, 2])
+    ax11.plot(freqs/1e9, 20*numpy.log10(numpy.abs(RHCP_fft)/numpy.max(numpy.abs(RHCP_fft))), 'r-', linewidth=2)
+    ax11.set_title('8b. RHCP Spectrum', fontweight='bold')
+    ax11.set_xlabel('Frequency [GHz]')
+    ax11.set_ylabel('Magnitude [dB]')
+    ax11.set_xlim([0, 2])
+    ax11.grid(True, alpha=0.3)
+    ax11.text(0.5, 0.9, 'RHCP = (H - j×V)/√2', 
+              transform=ax11.transAxes, ha='center', fontsize=9,
+              bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.5))
+    
+    ax12 = fig.add_subplot(gs[3, 3])
+    ax12.semilogy(freqs/1e9, power_lhcp_freq, 'b-', linewidth=2, label='LHCP')
+    ax12.semilogy(freqs/1e9, power_rhcp_freq, 'r-', linewidth=2, label='RHCP')
+    ax12.set_title('9. Power Spectrum', fontweight='bold')
+    ax12.set_xlabel('Frequency [GHz]')
+    ax12.set_ylabel('Power [V²]')
+    ax12.set_xlim([0, 2])
+    ax12.legend()
+    ax12.grid(True, alpha=0.3)
+    ax12.text(0.5, 0.9, f'Ratio: {numpy.sum(power_lhcp_freq)/numpy.sum(power_rhcp_freq):.3f}', 
+              transform=ax12.transAxes, ha='center', fontsize=9,
+              bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5))
+    
+    # Row 5: Time domain circular signals (reconstructed from circular spectra)
+    ax13 = fig.add_subplot(gs[4, 0])
+    ax13.plot(tb_digitized, lhcp, 'b-', linewidth=1.5)
+    ax13.set_title('10a. LHCP Time-Domain (REAL)', fontweight='bold')
+    ax13.set_xlabel('Time [ns]')
+    ax13.set_ylabel('Voltage [V]')
+    ax13.grid(True, alpha=0.3)
+    ax13.text(0.02, 0.98, 'Reconstructed from\nLHCP spectrum', 
+              transform=ax13.transAxes, va='top', fontsize=8,
+              bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7))
+    
+    ax14 = fig.add_subplot(gs[4, 1])
+    ax14.plot(tb_digitized, rhcp, 'r-', linewidth=1.5)
+    ax14.set_title('10b. RHCP Time-Domain (REAL)', fontweight='bold')
+    ax14.set_xlabel('Time [ns]')
+    ax14.set_ylabel('Voltage [V]')
+    ax14.grid(True, alpha=0.3)
+    ax14.text(0.02, 0.98, 'Reconstructed from\nRHCP spectrum', 
+              transform=ax14.transAxes, va='top', fontsize=8,
+              bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.7))
+    
+    ax15 = fig.add_subplot(gs[4, 2])
+    ax15.plot(tb_digitized, lhcp, 'b-', linewidth=2, label='LHCP')
+    ax15.plot(tb_digitized, rhcp, 'r-', linewidth=2, label='RHCP')
+    ax15.set_title('10c. Overlaid Signals', fontweight='bold')
+    ax15.set_xlabel('Time [ns]')
+    ax15.set_ylabel('Voltage [V]')
+    ax15.set_xlim([0,60])
+    ax15.legend()
+    ax15.grid(True, alpha=0.3)
 
-    #I think I need to include just the plane wave (i.e. no noise added and maybe not even impulse/ impulse response) to see how the delay and all that works for a "trigger_wave" in the getPayload function
-    #the trigger_wave here will nto really be anything about a trigger but a check to see if the delays and all that are working correctly...
-      
-    #getPayloadWaveforms(22.5, -25, [1,2,3,4], impulse, (eplane, hplane), snr=5,  plot=True)
+    ax16 = fig.add_subplot(gs[4, 3])
+    ax16.plot(tb_digitized, lhcp**2, 'b-', linewidth=2, label='LHCP')
+    ax16.plot(tb_digitized, rhcp**2, 'r-', linewidth=2, label='RHCP')
+    ax16.set_title('10d. Instantaneous Power', fontweight='bold')
+    ax16.set_xlabel('Time [ns]')
+    ax16.set_ylabel('Power [V²]')
+    ax16.legend()
+    ax16.grid(True, alpha=0.3)
+    ax16.set_xlim([0,60])
+    ax16.text(0.5, 0.9, 'Power = |signal|²', 
+              transform=ax16.transAxes, ha='center', fontsize=9,
+              bbox=dict(boxstyle='round', facecolor='orange', alpha=0.5))
+    
+    # Row 6: Summary and comparisons
+    ax17 = fig.add_subplot(gs[5, 0:2])
+    # Processing chain flow diagram
+    ax17.axis('off')
+    flow_text = """
+    SIGNAL PROCESSING CHAIN SUMMARY:
+    
+    TIME DOMAIN (REAL):
+    1. Impulse → 2. Antenna waveforms → 3. Coherent sum
+    ↓
+    FREQUENCY DOMAIN (COMPLEX):
+    4. FFT → 5. Filter → 6. Filtered spectrum → 7. Phase shift V by π/2
+    ↓
+    8. Circular decomposition: LHCP = (H + j×V)/√2, RHCP = (H - j×V)/√2
+    ↓
+    9. Power spectrum = |LHCP|², |RHCP|²
+    ↓
+    10. IFFT (optional) → Complex time-domain → Power = |signal|²
+    
 
 
+
+
+
+    """
+    ax17.text(0.05, 0.95, flow_text, transform=ax17.transAxes, 
+              va='top', ha='left', fontsize=10, family='monospace',
+              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    ax18 = fig.add_subplot(gs[5, 2:4])
+    # Summary statistics
+    summary_text = f"""
+    RESULTS SUMMARY:
+    
+    Input: φ={phi}°, θ={el}°, ψ={psi}° 
+    
+    Coherent Sum (REAL voltages):
+      H-pol: {numpy.max(numpy.abs(coh_h.real)):.3e} V
+      V-pol: {numpy.max(numpy.abs(coh_v.real)):.3e} V
+    
+    Circular Power (integrated over spectrum):
+      LHCP: {numpy.sum(power_lhcp_freq):.3e} V²
+      RHCP: {numpy.sum(power_rhcp_freq):.3e} V²
+      Ratio: {numpy.sum(power_lhcp_freq)/numpy.sum(power_rhcp_freq):.3f}
+    
+    Physical Interpretation:
+      • ψ=0°: Pure H-pol → LHCP = RHCP (equal power)
+      • ψ=45°: Linear ±45° → Circular (LHCP or RHCP dominant)
+      • ψ=90°: Pure V-pol → LHCP = RHCP (equal power)
+    """
+    ax18.text(0.05, 0.95, summary_text, transform=ax18.transAxes,
+              va='top', ha='left', fontsize=11, family='monospace',
+              bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+    ax18.axis('off')
+    
+    plt.suptitle(f'Complete Dual-Pol Signal Processing Chain: φ={phi}°, θ={el}°, ψ={psi}°', 
+                 fontsize=18, fontweight='bold', y=0.995)
+    
+    plt.savefig('plots/dualpol_processing_chain.png', dpi=150, bbox_inches='tight')
+    print(f"\n{'='*70}")
+    print(f"Saved comprehensive diagnostic plot to:")
+    print(f"  plots/dualpol_processing_chain.png")
+    print(f"{'='*70}\n")
+    plt.show()

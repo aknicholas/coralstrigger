@@ -60,7 +60,6 @@ for i,f in enumerate(files):
     plt.xlabel('Freq [GHz]')
     plt.ylabel('amplitude [dB]')
 
-
 #noise profile 2:
 thermal_noise = noise.ThermalNoise(0.26, 0.95, filter_order=(10,10), v_rms=1.0, 
                                    fbins=2**12, 

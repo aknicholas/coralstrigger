@@ -19,8 +19,8 @@ theta = 0
 if __name__=='__main__':
     parser = argparse.ArgumentParser(description="SNR efficiency scan")
     parser.add_argument('--fit-json', type=str, help='JSON file with A,b,window,step from threshold fit')
-    parser.add_argument('--target-global-rate', type=float, default=10.0, help='Target global false rate (Hz)')
-    parser.add_argument('--n-beams', type=int, default=966, help='Total active beams for global rate calc')
+    parser.add_argument('--target-global-rate', type=float, default=0.1, help='Target global false rate (Hz)')
+    parser.add_argument('--n-beams', type=int, default=400, help='Total active beams for global rate calc')
     parser.add_argument('--window', type=int, default=256, help='Power sum window (samples)')
     parser.add_argument('--step', type=int, default=None, help='Power sum step (samples, default window/2)')
     parser.add_argument('--save', type=str, default='snr_scan_data', help='Output base filename')
@@ -131,6 +131,11 @@ if __name__=='__main__':
                 n_phi = waveforms.shape[0]
                 n_ring = waveforms.shape[1]
                 n_samp = waveforms.shape[2]
+                # Determine actual antenna channels (collapse sector/ring fiction)
+                wf_flat = waveforms.reshape(-1, n_samp)
+                active_mask = numpy.any(wf_flat != 0, axis=1)
+                n_ant = int(active_mask.sum()) if active_mask.any() else wf_flat.shape[0]
+                norm = numpy.sqrt(n_ant)
 
                 # Build noise model for this n_samp
                 thermal_noise_v2 = noise.ThermalNoise(
@@ -155,9 +160,7 @@ if __name__=='__main__':
                         event_noise = numpy.reshape(noise_flat[start:stop], (n_phi, n_ring, n_samp))
                         injected = waveforms * snr + event_noise
                         coh_sum, _  = trigger.coherentSum(injected, timebase, delays, ringmask=ringmask)
-                        power,_ = trigger.powerSum(
-                            coh_sum / numpy.sqrt(n_phi * numpy.sum(ringmask)),
-                            window=window, step=step)
+                        power,_ = trigger.powerSum(coh_sum / norm, window=window, step=step)
                         if numpy.max(power) > threshold[0]:
                             _hits += 1
                     effs.append(_hits / trials)
@@ -211,9 +214,14 @@ if __name__=='__main__':
     # ----------------- Original single-direction SNR scan (unchanged) -----------------
     num_of_events_per_snr_step = 1000
     snr_scan = numpy.arange(0.2, 4.0, 0.1)
-
+    print(f"snr scan array {snr_scan}")
     delays = payload.getRemappedDelays(phi, theta, phi_sectors)
     waveforms, timebase, multiplier = payload.getPayloadWaveforms(phi, theta, phi_sectors, impulse, (eplane, hplane), plot=False, downsample=True)
+    # Actual antenna count (ignore phi sectors)
+    wf_flat = waveforms.reshape(-1, waveforms.shape[2])
+    active_mask = numpy.any(wf_flat != 0, axis=1)
+    n_ant = int(active_mask.sum()) if active_mask.any() else wf_flat.shape[0]
+    norm = 4
 
     thermal_noise_v2 = noise.ThermalNoise(0.26, 1.05, filter_order=(10,10), v_rms=1.0,
                                           fbins=waveforms.shape[2],
@@ -222,7 +230,7 @@ if __name__=='__main__':
     noise_list=[]
     noise_list.append(thermal_noise_v2.makeNoiseWaveform(
         ntraces=num_of_events_per_snr_step*waveforms.shape[0]*waveforms.shape[1]))
-
+    print(f"noise lise array {noise_list}")
     data_to_save = []
     data_to_save.append(snr_scan)
 
@@ -240,9 +248,7 @@ if __name__=='__main__':
                 injected = waveforms*snr + event_noise
                 coh_sum, timebase_coh_sum  = trigger.coherentSum(
                     injected, timebase, delays, ringmask=ringmask)
-                power,_ = trigger.powerSum(
-                    coh_sum / numpy.sqrt(waveforms.shape[0]*numpy.sum(ringmask)),
-                    window=window, step=step)
+                power,_ = trigger.powerSum(coh_sum / norm, window=window, step=step)
                 if numpy.max(power) > threshold[j]:
                     _hits += 1
             eff = _hits/num_of_events_per_snr_step
@@ -253,8 +259,7 @@ if __name__=='__main__':
         data_to_save.append(hits)
         data_to_save.append(hits * (numpy.max(multiplier)))
 
-        plt.plot(snr_scan, hits, label=f'Noise {j} (norm)')
-        plt.plot(snr_scan*(numpy.max(multiplier)), hits, '--', label=f'Noise {j} (scaled)')
+        plt.plot(snr_scan, hits, label=f'Noise')
 
     plt.ylim(-0.05,1.05)
     plt.xlabel("Injected SNR (coherent amplitude scale)")
@@ -263,4 +268,5 @@ if __name__=='__main__':
     plt.legend()
     numpy.savetxt(save_filename+'.txt', numpy.array(data_to_save), fmt="%.6g")
     plt.tight_layout()
+    plt.savefig("plots/SNR_scurve.png", dpi =150)
     plt.show()

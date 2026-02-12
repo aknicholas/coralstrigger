@@ -1,21 +1,63 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from . import CoRaLs_geometry as corals
 
-def Shannon_Whitaker(fs=4e9, plot=True):
+def get_Shannon_Whitaker_coeffs(fs=corals.ritc_sample_rate*1e9):
     """
-    Compute the frequency response of the Shannon–Whitaker FIR filter.
-    Returns (freqs, H_mag_db, cutoff_freq).
+    Get the Shannon-Whitaker FIR filter coefficients.
+    Returns normalized tap coefficients as 1D array (length 33).
     """
-    # 1) Define the integer coefficients from PDF:
+    # Define the integer coefficients from PDF:
     b = np.array([
          0,  -23,   0,  105,   0,  -263,   0,   526,
          0,  -949,   0,  1672,   0, -3216,   0, 10342,
       16384, 10342,   0, -3216,   0,  1672,   0,  -949,
          0,   526,   0,  -263,   0,   105,   0,   -23
     ], dtype=float)
-
-    # 2) Normalize to real taps:
+    
+    # Normalize to real taps:
     h = b / 32768.0  # array length 33
+    return h
+
+
+def apply_Shannon_Whitaker_filter(waveforms, fs=corals.ritc_sample_rate*1e9):
+    """
+    Apply Shannon-Whitaker FIR lowpass filter to waveforms.
+    
+    This is the digital anti-aliasing filter implemented in hardware.
+    Should be applied to both signal and noise after beamforming.
+    
+    Args:
+        waveforms: 1D or 2D array (samples) or (channels, samples)
+        fs: sampling frequency in Hz (default: 4 GHz)
+    
+    Returns:
+        filtered: same shape as input
+    """
+    from scipy.signal import lfilter
+    
+    h = get_Shannon_Whitaker_coeffs(fs)
+    
+    # Handle both 1D and 2D arrays
+    if waveforms.ndim == 1:
+        return lfilter(h, 1.0, waveforms)
+    elif waveforms.ndim == 2:
+        # Apply filter to each channel independently
+        filtered = np.zeros_like(waveforms)
+        for i in range(waveforms.shape[0]):
+            filtered[i] = lfilter(h, 1.0, waveforms[i])
+        return filtered
+    else:
+        raise ValueError(f"Expected 1D or 2D array, got shape {waveforms.shape}")
+
+
+def Shannon_Whitaker(fs=corals.ritc_sample_rate*1e9, plot=True):
+    """
+    Compute the frequency response of the Shannon–Whitaker FIR filter.
+    Returns (freqs, H_mag_db, cutoff_freq).
+    """
+    # Get filter coefficients
+    h = get_Shannon_Whitaker_coeffs(fs)
 
     # 3) Choose a fine FFT length for smooth plot:
     M = 4096

@@ -7,9 +7,19 @@ class ThermalNoise:
     '''
     ############################################################
     def __init__(self, fmin, fmax, fbins=2048, v_rms=1.0, normalize=True,
-                 filter_order=(1,1),      #(hipass order, lowpass order)
+                 filter_order=(0,0),      #(deprecated - kept for compatibility)
                  time_domain_sampling_rate=0.1):
-
+        '''
+        Generate white thermal noise in frequency domain.
+        
+        NOTE: Butterworth filtering removed. Noise is generated as white noise
+        (flat spectrum) and will be filtered by Shannon-Whitaker digital filter
+        after beamforming, matching hardware implementation.
+        
+        Args:
+            fmin, fmax: deprecated (kept for backward compatibility)
+            filter_order: deprecated (kept for backward compatibility)
+        '''
         self.vrms = v_rms
         self.n  = fbins
         self.nyq_freq = 1. / (2. * time_domain_sampling_rate)      
@@ -23,16 +33,10 @@ class ThermalNoise:
         self.frequencies = np.hstack((f, -f[1:len(f)-1][::-1]))
         self.amplitudes = np.zeros(fbins, dtype=float)
 
-        if filter_order == (0,0):
-             self.amplitudes[int(np.floor(fbins/2*(fmin/fnyq))):int(np.floor(fbins/2*(fmax/fnyq)))]= 1.0        
-        else:
-            ##Butterworth type roll-off
-            hipass_rolloff = 2 * filter_order[0]
-            lopass_rolloff = 2 * filter_order[1]
-
-            for i in range(1,fbins//2+1):
-                self.amplitudes[i] = np.sqrt(1./(1+pow((fmin/f[i]),hipass_rolloff)) * \
-                                             1./(1+pow((f[i]/fmax),lopass_rolloff)))
+        # Generate white noise (flat spectrum) - no Butterworth filtering
+        # Digital Shannon-Whitaker lowpass will be applied after beamforming
+        self.amplitudes[:fbins//2+1] = 1.0
+        
         if normalize:
             ##normalize to Vrms
             positive_definite_frequencies = np.ceil(len(self.frequencies)/2)
