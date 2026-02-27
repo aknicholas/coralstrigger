@@ -1,7 +1,6 @@
 """
 Generate power sums for dual-polarization noise with Shannon-Whitaker filtering.
 
-Sprint 4: Threshold Analysis
 - Loads pre-generated dual-pol noise files (H-pol and V-pol)
 - Applies Shannon-Whitaker digital lowpass filter to each antenna
 - Performs coherent beamforming in H/V basis
@@ -241,13 +240,14 @@ def generate_power_dualpol_chunked(noise_dir='noise', duration_sec=0.5,
 def main():
     parser = argparse.ArgumentParser(description="Generate dual-pol power sums for threshold analysis")
     parser.add_argument('--noise-dir', default='noise', help='Directory with noise files')
-    parser.add_argument('--duration', type=float, default=0.5, help='Duration to process (sec)')
+    parser.add_argument('--duration', type=float, default=None, help='Duration to process (sec), default: use all available')
     parser.add_argument('--chunk-duration', type=float, default=0.05, help='Chunk size (sec)')
     parser.add_argument('--window', type=int, default=160, help='Power window size (samples)')
     parser.add_argument('--step', type=int, default=40, help='Power step size (samples)')
     parser.add_argument('--phi', type=float, default=0.0, help='Azimuth angle (deg)')
     parser.add_argument('--theta', type=float, default=-30.0, help='Elevation angle (deg)')
     parser.add_argument('--no-filter', action='store_true', help='Disable Shannon-Whitaker filter')
+    parser.add_argument('--suffix', type=str, default='', help='Suffix appended to output filenames, e.g. "_nofilter" to distinguish runs')
     parser.add_argument('--output-dir', default='noise', help='Output directory')
     
     args = parser.parse_args()
@@ -255,8 +255,20 @@ def main():
     print("=" * 70)
     print("DUAL-POL POWER GENERATION FOR THRESHOLD ANALYSIS (CHUNKED)")
     print("=" * 70)
-    print(f"Sprint 4: Threshold curves with placeholder N_beams=100")
+    print(f"Threshold curves with placeholder N_beams=100")
     print("")
+    
+    # Get available noise duration if not specified
+    if args.duration is None:
+        from pathlib import Path
+        metadata_file = Path(args.noise_dir) / 'dualpol_noise_metadata.npy'
+        if metadata_file.exists():
+            metadata = np.load(metadata_file, allow_pickle=True).item()
+            args.duration = metadata['duration_sec']
+            print(f"Using all available noise: {args.duration:.3f} sec")
+        else:
+            args.duration = 0.5  # fallback
+            print(f"Warning: Metadata not found, using {args.duration} sec")
     
     # Generate power sums in chunks
     power_lhcp, power_rhcp, n_frames = generate_power_dualpol_chunked(
@@ -272,8 +284,9 @@ def main():
     output_path = Path(args.output_dir)
     output_path.mkdir(exist_ok=True)
     
-    lhcp_file = output_path / f'power_lhcp_{args.window}_{args.step}.npy'
-    rhcp_file = output_path / f'power_rhcp_{args.window}_{args.step}.npy'
+    suffix = args.suffix if args.suffix else ('_nofilter' if args.no_filter else '')
+    lhcp_file = output_path / f'power_lhcp_{args.window}_{args.step}{suffix}.npy'
+    rhcp_file = output_path / f'power_rhcp_{args.window}_{args.step}{suffix}.npy'
     
     sample_rate_hz = corals_geometry.ritc_sample_rate * 1e9
     

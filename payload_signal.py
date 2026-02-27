@@ -237,40 +237,24 @@ def getPayloadWaveforms(phi, el, impulse, beam_pattern, antennas=None, snr=1, no
     #print("timebase len:", len(timebase), "waveform len:", n_samples)
     
     if plot:
-        used_keys = list(delay[0]['delays'].keys())
-        n_used = len(used_keys)
-
-        # Collect all traces for consistent y‑limits
-        all_voltages = [
-            trigger_waves[key[0] - numpy.min(trigger_sectors),
-                          ring_map[key[1]]]
-            for key in used_keys
-        ]
-        global_vmin = min(v.min() for v in all_voltages)
-        global_vmax = max(v.max() for v in all_voltages)
-
-        # Create subplots
-        fig, axes = plt.subplots(n_used, 1,
-                                 figsize=(6, 3 * n_used),
-                                 sharex=True)
-        if n_used == 1:
+        # Plot waveforms for each antenna
+        n_ant = len(antennas)
+        fig, axes = plt.subplots(n_ant, 1, figsize=(10, 3*n_ant), sharex=True)
+        if n_ant == 1:
             axes = [axes]
-
-        # Plot each antenna’s downsampled waveform
-        for ax, key in zip(axes, used_keys):
-            sector_idx = key[0] - numpy.min(trigger_sectors)
-            ring_idx   = ring_map[key[1]]
-
-            ax.plot(timebase,
-                    trigger_waves[sector_idx, ring_idx],
-                    color='black', lw=1, alpha=0.7)
-            ax.set_ylim(global_vmin, global_vmax)
-            ax.set_title(f"Sector {key[0]} Ring {key[1]}")
-
+        
+        for ant_idx in range(n_ant):
+            axes[ant_idx].plot(timebase, trigger_waves[ant_idx], '''b-''', lw=0.8)
+            axes[ant_idx].set_title(f"Antenna {antennas[ant_idx]}")
+            axes[ant_idx].set_ylabel("Voltage [V]")
+            axes[ant_idx].grid(True, alpha=0.3)
+        
         axes[-1].set_xlabel("Time [ns]")
-        fig.suptitle(f"φ = {phi}°, θ = {el}°", fontsize=16)
+        fig.suptitle(f"Antenna Waveforms: φ = {phi}°, θ = {el}°", fontsize=16)
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plt.savefig("plots/debug.png")
+        import os
+        os.makedirs('''plots''', exist_ok=True)
+        plt.savefig("plots/antenna_waveforms.png", dpi=150)
         plt.show()
 
 
@@ -315,17 +299,20 @@ def getPayloadWaveforms_dualpol(phi, el, impulse, beam_patterns_h, beam_patterns
         ant_delay = delay[0]['delays'][ant_name]
         delay_samples = int(numpy.round(ant_delay / impulse.dt))
         
-        # All antennas of same polarization have identical beam patterns
-        # (phi_ant and theta_ant are polarization axes, not pointing directions)
-        # The geometric delay differences already account for antenna positions
-        
-        # For beam pattern: use raw sky angles (all antennas point same direction)
-        phi_interp = numpy.clip(phi, -180, 180)
+        # All 8 channels share the same physical boresight pointing direction.
+        # phi_ant/theta_ant are all zero and are intentionally NOT used here — the
+        # H vs V pol distinction is captured entirely by the choice of beam pattern
+        # function: beam_patterns_h and beam_patterns_v have their E/H planes swapped,
+        # which correctly models the 90° rotation of the V-pol element around boresight.
+        # Geometric delay differences (from x/y/z positions) are handled by delays.py.
+        phi_interp   = numpy.clip(phi, -180, 180)
         theta_interp = numpy.clip(el, -90, 90)
         
         # H-polarization waveform (channels 0-3, aligned at phi=0°)
         # H-pol: E-plane spans azimuth (narrow), H-plane spans elevation (wide)
-        waveforms[ant_num] = numpy.roll(impulse.voltage * 2 * snr, delay_samples) * \
+        # NOTE: impulse is normalized to Vpp=1. snr parameter is kept for legacy callers
+        # but snr_scan_dualpol.py sets snr=1 and applies its own amplitude scaling externally.
+        waveforms[ant_num] = numpy.roll(impulse.voltage * snr, delay_samples) * \
             pol_h * \
             dBtoVoltsAtten(beam_patterns_h[0](phi_interp)) * \
             dBtoVoltsAtten(beam_patterns_h[1](theta_interp))
@@ -338,7 +325,7 @@ def getPayloadWaveforms_dualpol(phi, el, impulse, beam_patterns_h, beam_patterns
         # V-polarization waveform (channels 4-7, aligned at phi=90°)
         # V-pol: E-plane spans elevation (narrow), H-plane spans azimuth (wide)
         # Pattern indices are swapped because antenna is rotated 90°
-        waveforms[ant_num + 4] = numpy.roll(impulse.voltage * 2 * snr, delay_samples) * \
+        waveforms[ant_num + 4] = numpy.roll(impulse.voltage * snr, delay_samples) * \
             pol_v * \
             dBtoVoltsAtten(beam_patterns_v[0](theta_interp)) * \
             dBtoVoltsAtten(beam_patterns_v[1](phi_interp))
@@ -358,23 +345,28 @@ def getPayloadWaveforms_dualpol(phi, el, impulse, beam_patterns_h, beam_patterns
     if plot:
         # Create side-by-side plots for H-pol and V-pol
         fig, axes = plt.subplots(n_antennas, 2, figsize=(12, 3*n_antennas))
+        if n_antennas == 1:
+            axes = axes.reshape(1, -1)
         
         for ant_idx in range(n_antennas):
-            # H-pol plot
-            axes[ant_idx, 0].plot(timebase, waveforms_h[ant_idx], 'b-', lw=0.8)
-            axes[ant_idx, 0].set_title(f"Ant {antennas[ant_idx]} H-pol")
-            axes[ant_idx, 0].set_ylabel("Voltage")
+            ant_num = antennas[ant_idx]
+            # H-pol plot (channels 0-3)
+            axes[ant_idx, 0].plot(timebase, waveforms[ant_num], 'b-', lw=0.8)
+            axes[ant_idx, 0].set_title(f"Ant {ant_num} H-pol (Ch{ant_num})")
+            axes[ant_idx, 0].set_ylabel("Voltage [V]")
             axes[ant_idx, 0].grid(True, alpha=0.3)
             
-            # V-pol plot
-            axes[ant_idx, 1].plot(timebase, waveforms_v[ant_idx], 'r-', lw=0.8)
-            axes[ant_idx, 1].set_title(f"Ant {antennas[ant_idx]} V-pol")
+            # V-pol plot (channels 4-7)
+            axes[ant_idx, 1].plot(timebase, waveforms[ant_num + 4], 'r-', lw=0.8)
+            axes[ant_idx, 1].set_title(f"Ant {ant_num} V-pol (Ch{ant_num+4})")
             axes[ant_idx, 1].grid(True, alpha=0.3)
         
         axes[-1, 0].set_xlabel("Time [ns]")
         axes[-1, 1].set_xlabel("Time [ns]")
-        fig.suptitle(f"Dual-Pol Waveforms: φ = {phi}°, θ = {el}°", fontsize=16)
+        fig.suptitle(f"Dual-Pol Waveforms: φ = {phi}°, θ = {el}°, ψ = {psi}°", fontsize=16)
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        import os
+        os.makedirs('plots', exist_ok=True)
         plt.savefig("plots/dualpol_waveforms.png", dpi=150)
         plt.show()
     
@@ -403,20 +395,38 @@ def downsamplePayload(time, trigger_waves):
 if __name__ =='__main__':
     import matplotlib.pyplot as plt
     import sys
+    import argparse
     sys.path.insert(0, '../')
     import coherent_sum as csum
     import tools.filters as filters
     
-    # Test configuration
-    phi = 20
-    el = 10
-    psi = 45  # 45° = equal H and V projection
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Dual-pol signal processing visualization')
+    parser.add_argument('--phi', type=float, default=20, help='Azimuth angle (deg)')
+    parser.add_argument('--theta', type=float, default=10, help='Elevation angle (deg)')
+    parser.add_argument('--psi', type=float, default=45, help='Polarization angle (deg): 0=H, 90=V')
+    parser.add_argument('--plots', type=str, default='all', 
+                       help='Comma-separated plot rows to show (1-6) or "all". E.g., "1,3,5" or "4,5,6"')
+    parser.add_argument('--no-save', action='store_true', help='Do not save plot to file')
+    args = parser.parse_args()
+    
+    # Parse plot selection
+    if args.plots == 'all':
+        show_rows = [1, 2, 3, 4, 5, 6]
+    else:
+        show_rows = sorted([int(x.strip()) for x in args.plots.split(',')])
+        show_rows = [r for r in show_rows if 1 <= r <= 6]
+    
+    phi = args.phi
+    el = args.theta
+    psi = args.psi
     
     print("\n" + "="*70)
     print("DUAL-POL SIGNAL PROCESSING CHAIN")
     print("="*70)
     print(f"Sky direction: phi={phi}°, theta={el}°")
     print(f"Polarization: psi={psi}° (0=H-pol, 90=V-pol)")
+    print(f"Showing plots: rows {show_rows}")
     print("="*70 + "\n")
     
     # ========== STEP 1: RAW IMPULSE ==========
@@ -426,7 +436,7 @@ if __name__ =='__main__':
     print(f"  Impulse: {len(impulse.voltage)} samples, dt={impulse.dt:.6f} ns")
     print(f"  Vpp = {numpy.max(impulse.voltage) - numpy.min(impulse.voltage):.3f} (normalized)")
     
-    # ========== STEP 2: ANTENNA WAVEFORMS (TIME DOMAIN - REAL) ==========
+    # ========== STEP 2: ANTENNA WAVEFORMS (TIME DOMAIN -  ) ==========
     print("\nSTEP 2: Generate antenna waveforms with beam patterns and delays")
     eplane_h = beamPattern(plot=False, which_plane='E', which_pol='H')
     hplane_h = beamPattern(plot=False, which_plane='H', which_pol='H')
@@ -441,15 +451,15 @@ if __name__ =='__main__':
         psi=psi, plot=False
     )
     print(f"  Generated 8 channels (4 H-pol + 4 V-pol)")
-    print(f"  All waveforms are REAL voltages (physical measurements)")
+    print(f"  All waveforms are   voltages (physical measurements)")
     print(f"  Beam multipliers (pol × beam pattern):")
     print(f"    H-pol: {multipliers[0]:.4f}, {multipliers[1]:.4f}, {multipliers[2]:.4f}, {multipliers[3]:.4f}")
     print(f"    V-pol: {multipliers[4]:.4f}, {multipliers[5]:.4f}, {multipliers[6]:.4f}, {multipliers[7]:.4f}")
     
-    # ========== STEP 3: COHERENT SUM (TIME DOMAIN - REAL) ==========
+    # ========== STEP 3: COHERENT SUM (TIME DOMAIN -  ) ==========
     print("\nSTEP 3: Coherent sum with geometric delays")
     delays_ns = getRemappedDelays(phi, el, antennas=[0, 1, 2, 3])
-    delays_q = numpy.round(delays_ns / aso_geometry.ritc_sample_step) * aso_geometry.ritc_sample_step
+    delays_q = delays.quantize_delays_ns(delays_ns)
     print(f"  Delays: {delays_ns}")
     print(f"  Quantized: {delays_q}")
     
@@ -469,7 +479,7 @@ if __name__ =='__main__':
     lhcp, rhcp, tb_digitized, inter = csum.coherentSum_dualpol(
         waveforms[:4], waveforms[4:], timebase, delays_q,
         downsample=True, channel_mask=[1,1,1,1], output='circular',
-        apply_filter=True, digitize_first=True, return_intermediates=True
+        apply_filter=True, return_intermediates=True
     )
     
     # Extract intermediate values for visualization
@@ -514,9 +524,9 @@ if __name__ =='__main__':
     print(f"  Pol ratio: {numpy.sum(power_lhcp_freq)/numpy.sum(power_rhcp_freq):.3f}")
     
     # ========== VISUALIZATION (all intermediates now available) ==========
-    # Note: lhcp and rhcp are already time-domain signals (REAL) from irfft
+    # Note: lhcp and rhcp are already time-domain signals from irfft
     print("\n✓ Step 10: IFFT already computed by coherentSum_dualpol()")
-    print(f"  lhcp and rhcp are REAL time-domain signals")
+    print(f"  lhcp and rhcp are   time-domain signals")
     print(f"  These are reconstructed waveforms from circular spectra")
     print(f"  Power = signal^2")
     
@@ -524,24 +534,27 @@ if __name__ =='__main__':
     # CREATE COMPREHENSIVE DIAGNOSTIC PLOT
     # ========================================================================
     
-    fig = plt.figure(figsize=(32, 22))
-    gs = fig.add_gridspec(6, 4, hspace=0.5, wspace=0.4)
+    n_rows = len(show_rows)
+    fig = plt.figure(figsize=(32, 4*n_rows))
+    gs = fig.add_gridspec(n_rows, 4, hspace=0.5, wspace=0.4)
     
-    # Row 1: Time-domain antenna signals (REAL)
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax1.plot(timebase, impulse.voltage, 'k-', linewidth=1.5)
-    ax1.set_title('1. Raw Impulse (REAL)', fontweight='bold')
-    ax1.set_xlabel('Time [ns]')
-    ax1.set_ylabel('Voltage [V]')
-    ax1.grid(True, alpha=0.3)
-    ax1.text(0.02, 0.98, 'Time Domain\nPhysical Voltage', 
-             transform=ax1.transAxes, va='top', fontsize=9,
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    # Map row number (1-6) to subplot row index (0 to n_rows-1)
+    row_map = {row_num: idx for idx, row_num in enumerate(show_rows)}
     
-    ax2 = fig.add_subplot(gs[0, 1])
+    # Row 1: Time-domain antenna signals
+    if 1 in show_rows:
+        r = row_map[1]
+        ax1 = fig.add_subplot(gs[r, 0])
+        ax1.plot(timebase, impulse.voltage, 'k-', linewidth=1.5)
+        ax1.set_title('1. Raw Impulse', fontweight='bold')
+        ax1.set_xlabel('Time [ns]')
+        ax1.set_ylabel('Voltage [V]')
+        ax1.grid(True, alpha=0.3)
+        
+        ax2 = fig.add_subplot(gs[r, 1])
     for i in range(4):
         ax2.plot(timebase, waveforms[i], label=f'Ch{i}', alpha=0.6)
-    ax2.set_title('2a. H-pol Antennas (REAL)', fontweight='bold')
+    ax2.set_title('2a. H-pol Antennas', fontweight='bold')
     ax2.set_xlabel('Time [ns]')
     ax2.set_ylabel('Voltage [V]')
     ax2.legend(loc='upper right', fontsize=8)
@@ -550,7 +563,7 @@ if __name__ =='__main__':
     ax3 = fig.add_subplot(gs[0, 2])
     for i in range(4):
         ax3.plot(timebase, waveforms[i+4], label=f'Ch{i+4}', alpha=0.6)
-    ax3.set_title('2b. V-pol Antennas (REAL)', fontweight='bold')
+    ax3.set_title('2b. V-pol Antennas', fontweight='bold')
     ax3.set_xlabel('Time [ns]')
     ax3.set_ylabel('Voltage [V]')
     ax3.legend(loc='upper right', fontsize=8)
@@ -559,269 +572,272 @@ if __name__ =='__main__':
     ax4 = fig.add_subplot(gs[0, 3])
     ax4.plot(tb, coh_h.real, 'b-', linewidth=2, label='H')
     ax4.plot(tb, coh_v.real, 'r-', linewidth=2, label='V')
-    ax4.set_title('3. Coherent Sum (REAL)', fontweight='bold')
+    ax4.set_title('3. Coherent Sum', fontweight='bold')
     ax4.set_xlabel('Time [ns]')
     ax4.set_ylabel('Voltage [V]')
     ax4.legend()
     ax4.grid(True, alpha=0.3)
-    ax4.text(0.02, 0.98, f'{1/(tb[1]-tb[0]):.1f} GHz sampling', 
-             transform=ax4.transAxes, va='top', fontsize=8,
-             bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5))
+
     
     # Row 2: Digitization and filtering
-    ax5 = fig.add_subplot(gs[1, 0])
-    ax5.plot(tb_digitized, coh_h_digitized, 'b-', linewidth=1.5, alpha=0.7, label='H digitized')
-    ax5.plot(tb_digitized, coh_v_digitized, 'r-', linewidth=1.5, alpha=0.7, label='V digitized')
-    ax5.set_title('4. Digitized @ 4 GHz (REAL)', fontweight='bold')
-    ax5.set_xlabel('Time [ns]')
-    ax5.set_ylabel('Voltage [V]')
-    ax5.legend(fontsize=8)
-    ax5.grid(True, alpha=0.3)
-    ax5.text(0.02, 0.98, f'ADC: {fs_adc/1e9:.1f} GHz\nDecimate: 1/{decimate_factor}', 
-             transform=ax5.transAxes, va='top', fontsize=8,
-             bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.5))
-    
-    ax7 = fig.add_subplot(gs[1, 1])
-    # Show filter response
-    ax7.plot(freqs_filter/1e9, filter_response_db, 'k-', linewidth=2)
-    ax7.axhline(-3, color='red', linestyle='--', alpha=0.7, label='-3 dB')
-    ax7.set_title('5a. Filter Frequency Response', fontweight='bold')
-    ax7.set_xlabel('Frequency [GHz]')
-    ax7.set_ylabel('Gain [dB]')
-    ax7.set_xlim([0, 2])
-    ax7.set_ylim([-60, 5])
-    ax7.legend()
-    ax7.grid(True, alpha=0.3)
-    ax7.text(0.5, 0.8, f'Cutoff: ~1.1 GHz', 
-             transform=ax7.transAxes, ha='center', fontsize=9,
-             bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
-    
-    ax8 = fig.add_subplot(gs[1, 2])
-    # Normalize filtered and unfiltered to same reference to see attenuation
-    H_max_ref = numpy.max(numpy.abs(H_fft_unfilt))
-    V_max_ref = max(numpy.max(numpy.abs(V_fft_unfilt)), 1e-20)  # Avoid division by zero
-    
-    # Plot unfiltered (faded) and filtered on same scale
-    H_unfilt_db = 20*numpy.log10((numpy.abs(H_fft_unfilt) + 1e-20)/H_max_ref)
-    H_filt_db = 20*numpy.log10((numpy.abs(H_fft) + 1e-20)/H_max_ref)
-    V_unfilt_db = 20*numpy.log10((numpy.abs(V_fft_unfilt) + 1e-20)/V_max_ref)
-    V_filt_db = 20*numpy.log10((numpy.abs(V_fft) + 1e-20)/V_max_ref)
-    
-    ax8.plot(freqs/1e9, H_unfilt_db, 'b:', linewidth=1, label='H unfiltered', alpha=0.4)
-    ax8.plot(freqs/1e9, H_filt_db, 'b-', linewidth=2, label='H filtered', alpha=0.9)
-    ax8.plot(freqs/1e9, V_unfilt_db, 'r:', linewidth=1, label='V unfiltered', alpha=0.4)
-    ax8.plot(freqs/1e9, V_filt_db, 'r-', linewidth=2, label='V filtered', alpha=0.9)
-    # Overlay filter response (scaled to fit on same axes)
-    ax8.plot(freqs_filter/1e9, filter_response_db, 'k--', linewidth=1.5, label='Filter', alpha=0.7)
-    ax8.set_title('5b. FFT: Before/After Filtering', fontweight='bold')
-    ax8.set_xlabel('Frequency [GHz]')
-    ax8.set_ylabel('Magnitude [dB]')
-    ax8.set_xlim([0, 2])
-    ax8.set_ylim([-60, 5])
-    ax8.legend(fontsize=7, loc='upper right')
-    ax8.grid(True, alpha=0.3)
-    
-    ax6 = fig.add_subplot(gs[1, 3])
-    ax6.plot(tb_digitized, coh_h_filtered, 'b-', linewidth=1.5, label='H filtered')
-    ax6.plot(tb_digitized, coh_v_filtered, 'r-', linewidth=1.5, label='V filtered')
-    ax6.set_title('6. Filtered (FIR) (REAL)', fontweight='bold')
-    ax6.set_xlabel('Time [ns]')
-    ax6.set_ylabel('Voltage [V]')
-    ax6.legend(fontsize=8)
-    ax6.grid(True, alpha=0.3)
-    ax6.text(0.5, 0.5, 'Shannon-Whitaker\n33-tap FIR', 
-             transform=ax6.transAxes, ha='center', va='center', fontsize=10,
-             bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
+    if 2 in show_rows:
+        r = row_map[2]
+        ax5 = fig.add_subplot(gs[r, 0])
+        ax5.plot(tb_digitized, coh_h_digitized, 'b-', linewidth=1.5, alpha=0.7, label='H digitized')
+        ax5.plot(tb_digitized, coh_v_digitized, 'r-', linewidth=1.5, alpha=0.7, label='V digitized')
+        ax5.set_title('4. Digitized @ 4 GHz', fontweight='bold')
+        ax5.set_xlabel('Time [ns]')
+        ax5.set_ylabel('Voltage [V]')
+        ax5.legend(fontsize=8)
+        ax5.grid(True, alpha=0.3)
+        ax5.text(0.02, 0.98, f'ADC: {fs_adc/1e9:.1f} GHz\nDecimate: 1/{decimate_factor}', 
+                 transform=ax5.transAxes, va='top', fontsize=8,
+                 bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.5))
+        
+        ax7 = fig.add_subplot(gs[r, 1])
+        # Show filter response
+        ax7.plot(freqs_filter/1e9, filter_response_db, 'k-', linewidth=2)
+        ax7.axhline(-3, color='red', linestyle='--', alpha=0.7, label='-3 dB')
+        ax7.set_title('5a. Filter Frequency Response', fontweight='bold')
+        ax7.set_xlabel('Frequency [GHz]')
+        ax7.set_ylabel('Gain [dB]')
+        ax7.set_xlim([0, 2])
+        ax7.set_ylim([-60, 5])
+        ax7.legend()
+        ax7.grid(True, alpha=0.3)
+        ax7.text(0.5, 0.8, f'Cutoff: ~1.1 GHz', 
+                 transform=ax7.transAxes, ha='center', fontsize=9,
+                 bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
+        
+        ax8 = fig.add_subplot(gs[r, 2])
+        # Normalize filtered and unfiltered to same reference to see attenuation
+        H_max_ref = numpy.max(numpy.abs(H_fft_unfilt))
+        V_max_ref = max(numpy.max(numpy.abs(V_fft_unfilt)), 1e-20)  # Avoid division by zero
+        
+        # Plot unfiltered (faded) and filtered on same scale
+        H_unfilt_db = 20*numpy.log10((numpy.abs(H_fft_unfilt) + 1e-20)/H_max_ref)
+        H_filt_db = 20*numpy.log10((numpy.abs(H_fft) + 1e-20)/H_max_ref)
+        V_unfilt_db = 20*numpy.log10((numpy.abs(V_fft_unfilt) + 1e-20)/V_max_ref)
+        V_filt_db = 20*numpy.log10((numpy.abs(V_fft) + 1e-20)/V_max_ref)
+        
+        ax8.plot(freqs/1e9, H_unfilt_db, 'b:', linewidth=1, label='H unfiltered', alpha=0.4)
+        ax8.plot(freqs/1e9, H_filt_db, 'b-', linewidth=2, label='H filtered', alpha=0.9)
+        ax8.plot(freqs/1e9, V_unfilt_db, 'r:', linewidth=1, label='V unfiltered', alpha=0.4)
+        ax8.plot(freqs/1e9, V_filt_db, 'r-', linewidth=2, label='V filtered', alpha=0.9)
+        # Overlay filter response (scaled to fit on same axes)
+        ax8.plot(freqs_filter/1e9, filter_response_db, 'k--', linewidth=1.5, label='Filter', alpha=0.7)
+        ax8.set_title('5b. FFT: Before/After Filtering', fontweight='bold')
+        ax8.set_xlabel('Frequency [GHz]')
+        ax8.set_ylabel('Magnitude [dB]')
+        ax8.set_xlim([0, 2])
+        ax8.set_ylim([-60, 5])
+        ax8.legend(fontsize=7, loc='upper right')
+        ax8.grid(True, alpha=0.3)
+        
+        ax6 = fig.add_subplot(gs[r, 3])
+        ax6.plot(tb_digitized, coh_h_filtered, 'b-', linewidth=1.5, label='H filtered')
+        ax6.plot(tb_digitized, coh_v_filtered, 'r-', linewidth=1.5, label='V filtered')
+        ax6.set_title('6. Filtered (FIR)', fontweight='bold')
+        ax6.set_xlabel('Time [ns]')
+        ax6.set_ylabel('Voltage [V]')
+        ax6.legend(fontsize=8)
+        ax6.grid(True, alpha=0.3)
+        #ax6.text(0.5, 0.5, 'Shannon-Whitaker\n33-tap FIR', 
+        #         transform=ax6.transAxes, ha='center', va='center', fontsize=10,
+        #         bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
     
     # Row 3: FFT spectra for H and V polarizations
-    ax_hfft = fig.add_subplot(gs[2, 0])
-    ax_hfft.plot(freqs/1e9, 20*numpy.log10(numpy.abs(H_fft)/numpy.max(numpy.abs(H_fft))), 'b-', linewidth=2)
-    ax_hfft.set_title('6a. H-pol FFT Spectrum', fontweight='bold')
-    ax_hfft.set_xlabel('Frequency [GHz]')
-    ax_hfft.set_ylabel('Magnitude [dB]')
-    ax_hfft.set_xlim([0, 2])
-    ax_hfft.set_ylim([-60, 5])
-    ax_hfft.grid(True, alpha=0.3)
-    ax_hfft.text(0.5, 0.9, 'FFT(H filtered)', 
-                 transform=ax_hfft.transAxes, ha='center', fontsize=9,
-                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
-    
-    ax_vfft = fig.add_subplot(gs[2, 1])
-    if numpy.max(numpy.abs(V_fft)) > 1e-10:  # Only plot if V has signal
-        ax_vfft.plot(freqs/1e9, 20*numpy.log10(numpy.abs(V_fft)/numpy.max(numpy.abs(V_fft))), 'r-', linewidth=2)
-    else:
-        ax_vfft.axhline(0, color='gray', linestyle='--', alpha=0.5)
-        ax_vfft.text(0.5, 0.5, 'No V-pol signal\n(psi=0°)', 
-                     transform=ax_vfft.transAxes, ha='center', va='center',
-                     fontsize=12, bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.7))
-    ax_vfft.set_title('6b. V-pol FFT Spectrum', fontweight='bold')
-    ax_vfft.set_xlabel('Frequency [GHz]')
-    ax_vfft.set_ylabel('Magnitude [dB]')
-    ax_vfft.set_xlim([0, 2])
-    ax_vfft.set_ylim([-60, 5])
-    ax_vfft.grid(True, alpha=0.3)
-    if numpy.max(numpy.abs(V_fft)) > 1e-10:
-        ax_vfft.text(0.5, 0.9, 'FFT(V filtered)', 
-                     transform=ax_vfft.transAxes, ha='center', fontsize=9,
-                     bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.5))
+    if 3 in show_rows:
+        r = row_map[3]
+        ax_hfft = fig.add_subplot(gs[r, 0])
+        ax_hfft.plot(freqs/1e9, 20*numpy.log10(numpy.abs(H_fft)/numpy.max(numpy.abs(H_fft))), 'b-', linewidth=2)
+        ax_hfft.set_title('6a. H-pol FFT Spectrum', fontweight='bold')
+        ax_hfft.set_xlabel('Frequency [GHz]')
+        ax_hfft.set_ylabel('Magnitude [dB]')
+        ax_hfft.set_xlim([0, 2])
+        ax_hfft.set_ylim([-60, 5])
+        ax_hfft.grid(True, alpha=0.3)
+        ax_hfft.text(0.5, 0.9, 'FFT(H filtered)', 
+                     transform=ax_hfft.transAxes, ha='center', fontsize=9,
+                     bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+        
+        ax_vfft = fig.add_subplot(gs[r, 1])
+        if numpy.max(numpy.abs(V_fft)) > 1e-10:  # Only plot if V has signal
+            ax_vfft.plot(freqs/1e9, 20*numpy.log10(numpy.abs(V_fft)/numpy.max(numpy.abs(V_fft))), 'r-', linewidth=2)
+        else:
+            ax_vfft.axhline(0, color='gray', linestyle='--', alpha=0.5)
+            ax_vfft.text(0.5, 0.5, 'No V-pol signal\n(psi=0°)', 
+                         transform=ax_vfft.transAxes, ha='center', va='center',
+                         fontsize=12, bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.7))
+        ax_vfft.set_title('6b. V-pol FFT Spectrum', fontweight='bold')
+        ax_vfft.set_xlabel('Frequency [GHz]')
+        ax_vfft.set_ylabel('Magnitude [dB]')
+        ax_vfft.set_xlim([0, 2])
+        ax_vfft.set_ylim([-60, 5])
+        ax_vfft.grid(True, alpha=0.3)
+        if numpy.max(numpy.abs(V_fft)) > 1e-10:
+            ax_vfft.text(0.5, 0.9, 'FFT(V filtered)', 
+                         transform=ax_vfft.transAxes, ha='center', fontsize=9,
+                         bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.5))
     
     # Row 4: Phase shift and circular decomposition
-    ax9 = fig.add_subplot(gs[3, 0])
-    # Phase of V before and after shift
-    phase_V = numpy.angle(V_fft)
-    phase_V_shifted = numpy.angle(V_shifted)
-    ax9.plot(freqs/1e9, phase_V, 'r-', alpha=0.5, label='V filtered')
-    ax9.plot(freqs/1e9, phase_V_shifted, 'r-', linewidth=2, label='V × j (π/2 shift)')
-    ax9.set_title('7. Phase Shift (V-pol)', fontweight='bold')
-    ax9.set_xlabel('Frequency [GHz]')
-    ax9.set_ylabel('Phase [rad]')
-    ax9.set_xlim([0, 2])
-    ax9.legend(fontsize=8)
-    ax9.grid(True, alpha=0.3)
-    ax9.text(0.5, 0.5, 'Multiply by j\n= +90° phase', 
-             transform=ax9.transAxes, ha='center', va='center', fontsize=10,
-             bbox=dict(boxstyle='round', facecolor='orange', alpha=0.5))
-    
-    ax10 = fig.add_subplot(gs[3, 1])
-    ax10.plot(freqs/1e9, 20*numpy.log10(numpy.abs(LHCP_fft)/numpy.max(numpy.abs(LHCP_fft))), 'b-', linewidth=2)
-    ax10.set_title('8a. LHCP Spectrum', fontweight='bold')
-    ax10.set_xlabel('Frequency [GHz]')
-    ax10.set_ylabel('Magnitude [dB]')
-    ax10.set_xlim([0, 2])
-    ax10.grid(True, alpha=0.3)
-    ax10.text(0.5, 0.9, 'LHCP = (H + j×V)/√2', 
-             transform=ax10.transAxes, ha='center', fontsize=9,
-             bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
-    
-    ax11 = fig.add_subplot(gs[3, 2])
-    ax11.plot(freqs/1e9, 20*numpy.log10(numpy.abs(RHCP_fft)/numpy.max(numpy.abs(RHCP_fft))), 'r-', linewidth=2)
-    ax11.set_title('8b. RHCP Spectrum', fontweight='bold')
-    ax11.set_xlabel('Frequency [GHz]')
-    ax11.set_ylabel('Magnitude [dB]')
-    ax11.set_xlim([0, 2])
-    ax11.grid(True, alpha=0.3)
-    ax11.text(0.5, 0.9, 'RHCP = (H - j×V)/√2', 
-              transform=ax11.transAxes, ha='center', fontsize=9,
-              bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.5))
-    
-    ax12 = fig.add_subplot(gs[3, 3])
-    ax12.semilogy(freqs/1e9, power_lhcp_freq, 'b-', linewidth=2, label='LHCP')
-    ax12.semilogy(freqs/1e9, power_rhcp_freq, 'r-', linewidth=2, label='RHCP')
-    ax12.set_title('9. Power Spectrum', fontweight='bold')
-    ax12.set_xlabel('Frequency [GHz]')
-    ax12.set_ylabel('Power [V²]')
-    ax12.set_xlim([0, 2])
-    ax12.legend()
-    ax12.grid(True, alpha=0.3)
-    ax12.text(0.5, 0.9, f'Ratio: {numpy.sum(power_lhcp_freq)/numpy.sum(power_rhcp_freq):.3f}', 
-              transform=ax12.transAxes, ha='center', fontsize=9,
-              bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5))
+    if 4 in show_rows:
+        r = row_map[4]
+        ax9 = fig.add_subplot(gs[r, 0])
+        # Phase of V before and after shift
+        phase_V = numpy.angle(V_fft)
+        phase_V_shifted = numpy.angle(V_shifted)
+        ax9.plot(freqs/1e9, phase_V, 'r-', alpha=0.5, label='V filtered')
+        ax9.plot(freqs/1e9, phase_V_shifted, 'r-', linewidth=2, label='V × j (π/2 shift)')
+        ax9.set_title('7. Phase Shift (V-pol)', fontweight='bold')
+        ax9.set_xlabel('Frequency [GHz]')
+        ax9.set_ylabel('Phase [rad]')
+        ax9.set_xlim([0, 2])
+        ax9.legend(fontsize=8)
+        ax9.grid(True, alpha=0.3)
+        ax9.text(0.5, 0.5, 'Multiply by j\n= +90° phase', 
+                 transform=ax9.transAxes, ha='center', va='center', fontsize=10,
+                 bbox=dict(boxstyle='round', facecolor='orange', alpha=0.5))
+        
+        ax10 = fig.add_subplot(gs[r, 1])
+        ax10.plot(freqs/1e9, 20*numpy.log10(numpy.abs(LHCP_fft)/numpy.max(numpy.abs(LHCP_fft))), 'b-', linewidth=2)
+        ax10.set_title('8a. LHCP Spectrum', fontweight='bold')
+        ax10.set_xlabel('Frequency [GHz]')
+        ax10.set_ylabel('Magnitude [dB]')
+        ax10.set_xlim([0, 2])
+        ax10.grid(True, alpha=0.3)
+        ax10.text(0.5, 0.9, 'LHCP = (H + j×V)/√2', 
+                 transform=ax10.transAxes, ha='center', fontsize=9,
+                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+        
+        ax11 = fig.add_subplot(gs[r, 2])
+        ax11.plot(freqs/1e9, 20*numpy.log10(numpy.abs(RHCP_fft)/numpy.max(numpy.abs(RHCP_fft))), 'r-', linewidth=2)
+        ax11.set_title('8b. RHCP Spectrum', fontweight='bold')
+        ax11.set_xlabel('Frequency [GHz]')
+        ax11.set_ylabel('Magnitude [dB]')
+        ax11.set_xlim([0, 2])
+        ax11.grid(True, alpha=0.3)
+        ax11.text(0.5, 0.9, 'RHCP = (H - j×V)/√2', 
+                  transform=ax11.transAxes, ha='center', fontsize=9,
+                  bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.5))
+        
+        ax12 = fig.add_subplot(gs[r, 3])
+        ax12.semilogy(freqs/1e9, power_lhcp_freq, 'b-', linewidth=2, label='LHCP')
+        ax12.semilogy(freqs/1e9, power_rhcp_freq, 'r-', linewidth=2, label='RHCP')
+        ax12.set_title('9. Power Spectrum', fontweight='bold')
+        ax12.set_xlabel('Frequency [GHz]')
+        ax12.set_ylabel('Power [V²]')
+        ax12.set_xlim([0, 2])
+        ax12.legend()
+        ax12.grid(True, alpha=0.3)
+        ax12.text(0.5, 0.9, f'Ratio: {numpy.sum(power_lhcp_freq)/numpy.sum(power_rhcp_freq):.3f}', 
+                  transform=ax12.transAxes, ha='center', fontsize=9,
+                  bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5))
     
     # Row 5: Time domain circular signals (reconstructed from circular spectra)
-    ax13 = fig.add_subplot(gs[4, 0])
-    ax13.plot(tb_digitized, lhcp, 'b-', linewidth=1.5)
-    ax13.set_title('10a. LHCP Time-Domain (REAL)', fontweight='bold')
-    ax13.set_xlabel('Time [ns]')
-    ax13.set_ylabel('Voltage [V]')
-    ax13.grid(True, alpha=0.3)
-    ax13.text(0.02, 0.98, 'Reconstructed from\nLHCP spectrum', 
-              transform=ax13.transAxes, va='top', fontsize=8,
-              bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7))
+    if 5 in show_rows:
+        r = row_map[5]
+        ax13 = fig.add_subplot(gs[r, 0])
+        ax13.plot(tb_digitized, lhcp, 'b-', linewidth=1.5)
+        ax13.set_title('10a. LHCP Time-Domain', fontweight='bold')
+        ax13.set_xlabel('Time [ns]')
+        ax13.set_ylabel('Voltage [V]')
+        ax13.grid(True, alpha=0.3)
+        #ax13.text(0.02, 0.98, 'Reconstructed from\nLHCP spectrum', 
+        #          transform=ax13.transAxes, va='top', fontsize=8,
+        #          bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7))
+        
+        ax14 = fig.add_subplot(gs[r, 1])
+        ax14.plot(tb_digitized, rhcp, 'r-', linewidth=1.5)
+        ax14.set_title('10b. RHCP Time-Domain', fontweight='bold')
+        ax14.set_xlabel('Time [ns]')
+        ax14.set_ylabel('Voltage [V]')
+        ax14.grid(True, alpha=0.3)
+        #ax14.text(0.02, 0.98, 'Reconstructed from\nRHCP spectrum', 
+        #          transform=ax14.transAxes, va='top', fontsize=8,
+        #          bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.7))
+        
+        ax15 = fig.add_subplot(gs[r, 2])
+        ax15.plot(tb_digitized, lhcp, 'b-', linewidth=2, label='LHCP')
+        ax15.plot(tb_digitized, rhcp, 'r-', linewidth=2, label='RHCP')
+        ax15.set_title('10c. Overlaid Signals', fontweight='bold')
+        ax15.set_xlabel('Time [ns]')
+        ax15.set_ylabel('Voltage [V]')
+        ax15.set_xlim([0,60])
+        ax15.legend()
+        ax15.grid(True, alpha=0.3)
     
-    ax14 = fig.add_subplot(gs[4, 1])
-    ax14.plot(tb_digitized, rhcp, 'r-', linewidth=1.5)
-    ax14.set_title('10b. RHCP Time-Domain (REAL)', fontweight='bold')
-    ax14.set_xlabel('Time [ns]')
-    ax14.set_ylabel('Voltage [V]')
-    ax14.grid(True, alpha=0.3)
-    ax14.text(0.02, 0.98, 'Reconstructed from\nRHCP spectrum', 
-              transform=ax14.transAxes, va='top', fontsize=8,
-              bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.7))
-    
-    ax15 = fig.add_subplot(gs[4, 2])
-    ax15.plot(tb_digitized, lhcp, 'b-', linewidth=2, label='LHCP')
-    ax15.plot(tb_digitized, rhcp, 'r-', linewidth=2, label='RHCP')
-    ax15.set_title('10c. Overlaid Signals', fontweight='bold')
-    ax15.set_xlabel('Time [ns]')
-    ax15.set_ylabel('Voltage [V]')
-    ax15.set_xlim([0,60])
-    ax15.legend()
-    ax15.grid(True, alpha=0.3)
-
-    ax16 = fig.add_subplot(gs[4, 3])
-    ax16.plot(tb_digitized, lhcp**2, 'b-', linewidth=2, label='LHCP')
-    ax16.plot(tb_digitized, rhcp**2, 'r-', linewidth=2, label='RHCP')
-    ax16.set_title('10d. Instantaneous Power', fontweight='bold')
-    ax16.set_xlabel('Time [ns]')
-    ax16.set_ylabel('Power [V²]')
-    ax16.legend()
-    ax16.grid(True, alpha=0.3)
-    ax16.set_xlim([0,60])
-    ax16.text(0.5, 0.9, 'Power = |signal|²', 
-              transform=ax16.transAxes, ha='center', fontsize=9,
-              bbox=dict(boxstyle='round', facecolor='orange', alpha=0.5))
+        ax16 = fig.add_subplot(gs[r, 3])
+        ax16.plot(tb_digitized, lhcp**2, 'b-', linewidth=2, label='LHCP')
+        ax16.plot(tb_digitized, rhcp**2, 'r-', linewidth=2, label='RHCP')
+        ax16.set_title('10d. Instantaneous Power', fontweight='bold')
+        ax16.set_xlabel('Time [ns]')
+        ax16.set_ylabel('Power [V²]')
+        ax16.legend()
+        ax16.grid(True, alpha=0.3)
+        ax16.set_xlim([0,60])
+        #ax16.text(0.5, 0.9, 'Power = |signal|²', 
+        #          transform=ax16.transAxes, ha='center', fontsize=9,
+        #          bbox=dict(boxstyle='round', facecolor='orange', alpha=0.5))
     
     # Row 6: Summary and comparisons
-    ax17 = fig.add_subplot(gs[5, 0:2])
-    # Processing chain flow diagram
-    ax17.axis('off')
-    flow_text = """
-    SIGNAL PROCESSING CHAIN SUMMARY:
-    
-    TIME DOMAIN (REAL):
-    1. Impulse → 2. Antenna waveforms → 3. Coherent sum
-    ↓
-    FREQUENCY DOMAIN (COMPLEX):
-    4. FFT → 5. Filter → 6. Filtered spectrum → 7. Phase shift V by π/2
-    ↓
-    8. Circular decomposition: LHCP = (H + j×V)/√2, RHCP = (H - j×V)/√2
-    ↓
-    9. Power spectrum = |LHCP|², |RHCP|²
-    ↓
-    10. IFFT (optional) → Complex time-domain → Power = |signal|²
-    
-
-
-
-
-
-    """
-    ax17.text(0.05, 0.95, flow_text, transform=ax17.transAxes, 
-              va='top', ha='left', fontsize=10, family='monospace',
-              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    
-    ax18 = fig.add_subplot(gs[5, 2:4])
-    # Summary statistics
-    summary_text = f"""
-    RESULTS SUMMARY:
-    
-    Input: φ={phi}°, θ={el}°, ψ={psi}° 
-    
-    Coherent Sum (REAL voltages):
-      H-pol: {numpy.max(numpy.abs(coh_h.real)):.3e} V
-      V-pol: {numpy.max(numpy.abs(coh_v.real)):.3e} V
-    
-    Circular Power (integrated over spectrum):
-      LHCP: {numpy.sum(power_lhcp_freq):.3e} V²
-      RHCP: {numpy.sum(power_rhcp_freq):.3e} V²
-      Ratio: {numpy.sum(power_lhcp_freq)/numpy.sum(power_rhcp_freq):.3f}
-    
-    Physical Interpretation:
-      • ψ=0°: Pure H-pol → LHCP = RHCP (equal power)
-      • ψ=45°: Linear ±45° → Circular (LHCP or RHCP dominant)
-      • ψ=90°: Pure V-pol → LHCP = RHCP (equal power)
-    """
-    ax18.text(0.05, 0.95, summary_text, transform=ax18.transAxes,
-              va='top', ha='left', fontsize=11, family='monospace',
-              bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-    ax18.axis('off')
+    if 6 in show_rows:
+        r = row_map[6]
+        ax17 = fig.add_subplot(gs[r, 0:2])
+        # Processing chain flow diagram
+        ax17.axis('off')
+        flow_text = """
+        SIGNAL PROCESSING CHAIN SUMMARY:
+        
+        TIME DOMAIN ( ):
+        1. Impulse → 2. Antenna waveforms → 3. Coherent sum
+        ↓
+        FREQUENCY DOMAIN (COMPLEX):
+        4. FFT → 5. Filter → 6. Filtered spectrum → 7. Phase shift V by π/2
+        ↓
+        8. Circular decomposition: LHCP = (H + j×V)/√2, RHCP = (H - j×V)/√2
+        ↓
+        9. Power spectrum = |LHCP|², |RHCP|²
+        ↓
+        10. IFFT (optional) → Complex time-domain → Power = |signal|²
+        """
+        ax17.text(0.05, 0.95, flow_text, transform=ax17.transAxes, 
+                  va='top', ha='left', fontsize=10, family='monospace',
+                  bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        
+        ax18 = fig.add_subplot(gs[r, 2:4])
+        # Summary statistics
+        summary_text = f"""
+        RESULTS SUMMARY:
+        
+        Input: φ={phi}°, θ={el}°, ψ={psi}° 
+        
+        Coherent Sum (  voltages):
+          H-pol: {numpy.max(numpy.abs(coh_h.real)):.3e} V
+          V-pol: {numpy.max(numpy.abs(coh_v.real)):.3e} V
+        
+        Circular Power (integrated over spectrum):
+          LHCP: {numpy.sum(power_lhcp_freq):.3e} V²
+          RHCP: {numpy.sum(power_rhcp_freq):.3e} V²
+          Ratio: {numpy.sum(power_lhcp_freq)/numpy.sum(power_rhcp_freq):.3f}
+        
+        Physical Interpretation:
+          • ψ=0°: Pure H-pol → LHCP = RHCP (equal power)
+          • ψ=45°: Linear ±45° → Circular (LHCP or RHCP dominant)
+          • ψ=90°: Pure V-pol → LHCP = RHCP (equal power)
+        """
+        ax18.text(0.05, 0.95, summary_text, transform=ax18.transAxes,
+                  va='top', ha='left', fontsize=11, family='monospace',
+                  bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+        ax18.axis('off')
     
     plt.suptitle(f'Complete Dual-Pol Signal Processing Chain: φ={phi}°, θ={el}°, ψ={psi}°', 
                  fontsize=18, fontweight='bold', y=0.995)
     
-    plt.savefig('plots/dualpol_processing_chain.png', dpi=150, bbox_inches='tight')
-    print(f"\n{'='*70}")
-    print(f"Saved comprehensive diagnostic plot to:")
-    print(f"  plots/dualpol_processing_chain.png")
-    print(f"{'='*70}\n")
+    if not args.no_save:
+        plt.savefig('plots/dualpol_processing_chain.png', dpi=150, bbox_inches='tight')
+        print(f"\n{'='*70}")
+        print(f"Saved comprehensive diagnostic plot to:")
+        print(f"  plots/dualpol_processing_chain.png")
+        print(f"{'='*70}\n")
     plt.show()

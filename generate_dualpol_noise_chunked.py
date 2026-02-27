@@ -1,12 +1,6 @@
 """
 Generate dual-polarization noise files for 8 channels (4 antennas × 2 pols).
 
-Sprint 3: Noise Infrastructure - CHUNKED GENERATION
-- Generates noise in manageable chunks to avoid memory overflow
-- Streams directly to disk using memory-mapped arrays
-- Each channel is statistically independent
-- Can generate hours of noise without running out of RAM
-
 Usage:
     python generate_dualpol_noise_chunked.py --duration 0.5 --chunk-duration 0.01
     
@@ -22,13 +16,11 @@ import noise
 import tools.CoRaLs_geometry as corals_geometry
 
 def generate_dualpol_noise_chunked(duration_sec=0.5, output_dir='noise', vrms=1.0, 
-                                   fmin=0.26, fmax=0.95,
                                    chunk_duration_sec=0.01):
     """
     Generate independent white thermal noise for all 8 dual-pol channels using chunked streaming.
     
-    NOTE: Noise is generated as white (flat spectrum). Shannon-Whitaker digital lowpass
-    filter will be applied after beamforming to match hardware implementation.
+    Noise is generated as white (flat spectrum). 
     
     Parameters
     ----------
@@ -38,18 +30,11 @@ def generate_dualpol_noise_chunked(duration_sec=0.5, output_dir='noise', vrms=1.
         Directory to save noise files. Default is 'noise/'.
     vrms : float
         RMS voltage for noise. Default is 1.0.
-    fmin : float
-        Deprecated (kept for backward compatibility). 
-    fmax : float
-        Deprecated (kept for backward compatibility).
     chunk_duration_sec : float
         Duration of each memory chunk in seconds. Default is 0.01 (10 ms).
         Smaller chunks use less memory but take longer.
-        
-    Returns
-    -------
-    None
-        Noise arrays are saved directly to disk to avoid memory overflow.
+
+    Noise arrays are saved directly to disk to avoid memory overflow.
     """
     
     # Calculate required samples
@@ -58,21 +43,6 @@ def generate_dualpol_noise_chunked(duration_sec=0.5, output_dir='noise', vrms=1.
     total_samples = int(duration_sec * 1e9 / sample_step_ns)
     chunk_samples = int(chunk_duration_sec * 1e9 / sample_step_ns)
     n_chunks = int(np.ceil(total_samples / chunk_samples))
-    
-    print("=" * 70)
-    print("DUAL-POL NOISE GENERATION (CHUNKED STREAMING)")
-    print("=" * 70)
-    print(f"Sample rate: {sample_rate_GHz} GHz")
-    print(f"Sample step: {sample_step_ns} ns")
-    print(f"Total duration: {duration_sec} seconds")
-    print(f"Total samples: {total_samples:,}")
-    print(f"Chunk duration: {chunk_duration_sec} seconds")
-    print(f"Chunk samples: {chunk_samples:,}")
-    print(f"Number of chunks: {n_chunks}")
-    print(f"Noise type: White (unfiltered)")
-    print(f"Filter: Shannon-Whitaker applied after beamforming")
-    print(f"Vrms: {vrms}")
-    print("")
     
     # Calculate chunk memory requirements
     fbins_chunk = int(2**np.ceil(np.log2(chunk_samples)))
@@ -107,10 +77,7 @@ def generate_dualpol_noise_chunked(duration_sec=0.5, output_dir='noise', vrms=1.
     
     # Initialize noise generator (once for all chunks)
     print("Initializing thermal noise generator...")
-    thermal_noise = noise.ThermalNoise(
-        fmin, fmax, 
-        filter_order=(0, 0),  # No filtering - Shannon-Whitaker applied after beamforming
-        v_rms=vrms,
+    thermal_noise = noise.ThermalNoise(v_rms=vrms,
         fbins=fbins_chunk,
         time_domain_sampling_rate=sample_step_ns
     )
@@ -160,10 +127,10 @@ def generate_dualpol_noise_chunked(duration_sec=0.5, output_dir='noise', vrms=1.
     
     # Calculate statistics
     max_corr = max(all_correlations) if all_correlations else 0.0
-    print(f"✓ Maximum H-V correlation: {max_corr:.6f}")
+    print(f"Maximum H-V correlation: {max_corr:.6f}")
     
     if max_corr > 0.01:
-        print(f"⚠️  WARNING: Correlation {max_corr:.6f} exceeds threshold (0.01)")
+        print(f" WARNING: Correlation {max_corr:.6f} exceeds threshold (0.01)")
     
     # Get file sizes
     h_size_GB = os.path.getsize(h_file) / (1024**3)
@@ -171,9 +138,9 @@ def generate_dualpol_noise_chunked(duration_sec=0.5, output_dir='noise', vrms=1.
     
     print("")
     print("Files saved:")
-    print(f"  ✓ H-pol: {h_file} ({h_size_GB:.3f} GB)")
-    print(f"  ✓ V-pol: {v_file} ({v_size_GB:.3f} GB)")
-    print(f"  ✓ Time:  {time_file}")
+    print(f" H-pol: {h_file} ({h_size_GB:.3f} GB)")
+    print(f" V-pol: {v_file} ({v_size_GB:.3f} GB)")
+    print(f" Time:  {time_file}")
     
     # Save metadata
     metadata = {
@@ -181,10 +148,6 @@ def generate_dualpol_noise_chunked(duration_sec=0.5, output_dir='noise', vrms=1.
         'total_samples': total_samples,
         'sample_rate_GHz': sample_rate_GHz,
         'sample_step_ns': sample_step_ns,
-        'fmin_GHz': fmin,  # Deprecated
-        'fmax_GHz': fmax,  # Deprecated
-        'filter_type': 'white_unfiltered',
-        'filter_note': 'Shannon-Whitaker digital lowpass applied after beamforming',
         'vrms': vrms,
         'n_antennas': 4,
         'shape_h': (4, total_samples),
@@ -233,6 +196,4 @@ if __name__ == '__main__':
         chunk_duration_sec=args.chunk_duration,
         output_dir=args.output_dir,
         vrms=args.vrms,
-        fmin=args.fmin,
-        fmax=args.fmax
     )

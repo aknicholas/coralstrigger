@@ -1,38 +1,42 @@
 import numpy as np
 
-# CoRaLS geometry: 8 channels (4 physical antennas × 2 polarizations)
-# Channels 0-3: H-pol at 4 corners (all aligned with same polarization axis)
-# Channels 4-7: V-pol at 4 corners (all aligned with same polarization axis, orthogonal to H)
+# 8 channels: 4 physical antennas × 2 pols (H,V)
+# Channels 0-3: H-pol, Channels 4-7: V-pol
 num_antennas = 8
 
-# RITC sampling
 ritc_sample_rate = 4  # GHz
 ritc_sample_step = 1/ritc_sample_rate  # ns
 
-# Physical positions: 4 corners of a square
-# Channels 0-3 (H-pol) and 4-7 (V-pol) share the same 4 physical locations
+# Antenna positions in x-z plane (y=0)
+# Array: 2m square, corners at (±1/√2, 0, ±1/√2)
 span = 2
-xydisp = span/(2*np.sqrt(2))
-xpos = [xydisp, xydisp, -xydisp, -xydisp,   # H-pol antennas
-        xydisp, xydisp, -xydisp, -xydisp]   # V-pol antennas (same positions)
-ypos = [xydisp, -xydisp, -xydisp, xydisp,   # H-pol antennas
-        xydisp, -xydisp, -xydisp, xydisp]   # V-pol antennas (same positions)
-zpos = [0, 0, 0, 0, 0, 0, 0, 0]  # meters (all at same height)
+d = span/(2*np.sqrt(2))  # d = 1/√2 ≈ 0.707 m
+xpos = [0, 0,  0,  0,  0, 0,  0,  0]
+ypos = [d, d, -d, -d,  d, d, -d, -d]
+zpos = [d, -d, -d, d,  d, -d, -d, d]
 
-# Array coordinate system: pointing at horizon to avoid pole singularity
-# All H-pol channels aligned with 0° (pointing along x-axis in antenna frame)
-# All V-pol channels aligned with 90° (pointing along y-axis in antenna frame)
-# NOTE: theta_tilt = 0 means horizon in array frame. To convert to true sky coordinates: true_theta = theta - 90
-phi_tilt = [0, 0, 0, 0,      # H-pol: all aligned at 0°
-            90, 90, 90, 90]  # V-pol: all aligned at 90° (orthogonal to H)
-theta_tilt = [0, 0, 0, 0, 0, 0, 0, 0]  # elevation angle in array frame (0 = horizon, nadir is at -90 in true coords)
+# Boresight pointing direction of the physical antennas (shared by all 8 channels).
+# All antennas point the same direction; theta=0 = horizon to avoid pole-wrapping
+# singularities in beam-pattern interpolation.
+#
+# The H-pol / V-pol distinction is NOT encoded here — it is handled in payload_signal.py
+# by selecting different beam pattern functions for each polarization (swapped E/H planes),
+# which correctly captures the 90° physical rotation of the V-pol element around boresight.
+#
+# phi_ant/theta_ant are used as beam-pattern boresight offsets in the legacy
+# getPayloadWaveforms() function. With all entries equal it is a no-op there, which is correct.
+phi_tilt   = [0, 0, 0, 0,   # H-pol boresight pointing (phi)
+              0, 0, 0, 0]   # V-pol
+theta_tilt = [0, 0, 0, 0,   # H-pol boresight pointing (theta)
+              0, 0, 0, 0]   # V-pol
+
 
 x_ant = np.array(xpos)
 y_ant = np.array(ypos)
 z_ant = np.array(zpos)
 r_ant = np.sqrt(x_ant**2 + y_ant**2 + z_ant**2)
-phi_ant=np.array(phi_tilt)
-theta_ant=np.array(theta_tilt)
+phi_ant = np.array(phi_tilt)
+theta_ant = np.array(theta_tilt)
 
 center_x = np.mean(x_ant[:4])  # Use first 4 positions for center
 center_y = np.mean(y_ant[:4])
@@ -55,10 +59,15 @@ def drawPayload(incoming_wave=False, phi=0, theta=0):
     ax.scatter(xpos[4:], ypos[4:], zpos[4:], marker='s', color='red', s=200, 
                alpha=0.6, edgecolors='black', linewidth=2, label='V-pol')
     
-    # Draw nadir pointing arrows for each physical location
+    # Draw antenna pointing arrows for each physical location
     arrow_length = 0.5
     for i in range(4):
-        ax.quiver(xpos[i], ypos[i], zpos[i], 0, 0, -arrow_length,
+        theta_rad = np.radians(theta_ant[i])
+        phi_rad = np.radians(phi_ant[i])
+        dx = np.cos(theta_rad) * np.cos(phi_rad)
+        dy = np.cos(theta_rad) * np.sin(phi_rad)
+        dz = np.sin(theta_rad)
+        ax.quiver(xpos[i], ypos[i], zpos[i], dx*arrow_length, dy*arrow_length, dz*arrow_length,
                  color='green', arrow_length_ratio=0.3, linewidth=2)
         ax.text(xpos[i], ypos[i], zpos[i]+0.3, f'Ch{i}(H)\nCh{i+4}(V)', 
                 fontsize=10, fontweight='bold', ha='center')
@@ -93,9 +102,13 @@ def drawPayload(incoming_wave=False, phi=0, theta=0):
     ax2 = fig.add_subplot(122)
     ax2.scatter(xpos, zpos, marker='^', color='blue', s=300, alpha=0.8, edgecolors='black', linewidth=2)
     
-    # Draw nadir arrows in 2D
+    # Draw antenna pointing arrows in 2D (x-z projection)
     for i in range(num_antennas):
-        ax2.arrow(xpos[i], zpos[i], 0, -arrow_length,
+        theta_rad = np.radians(theta_ant[i])
+        phi_rad = np.radians(phi_ant[i])
+        dx = np.cos(theta_rad) * np.cos(phi_rad)
+        dz = np.sin(theta_rad)
+        ax2.arrow(xpos[i], zpos[i], dx*arrow_length, dz*arrow_length,
                  head_width=0.2, head_length=0.1, fc='green', ec='green', linewidth=2)
         ax2.text(xpos[i], zpos[i]+0.15, f'A{i+1}', fontsize=12, fontweight='bold', ha='center')
     
@@ -113,7 +126,7 @@ def drawPayload(incoming_wave=False, phi=0, theta=0):
 
 
 
-def drawWavefrontPlanes(incoming_wave=False, phi=0, theta=0):
+def drawWavefrontPlanes(incoming_wave=False, phi=0, theta=0, show_labels=True):
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
     
@@ -133,8 +146,19 @@ def drawWavefrontPlanes(incoming_wave=False, phi=0, theta=0):
     for idx in range(num_antennas):
         ax1.scatter(xpos[idx], ypos[idx], marker='^', color='blue', s=300, 
                    alpha=0.8, edgecolors='black', linewidth=2)
-        ax1.text(xpos[idx], ypos[idx]+0.25, f'A{idx+1}', fontsize=12, 
-                fontweight='bold', ha='center')
+        if show_labels:
+            ax1.text(xpos[idx], ypos[idx]+0.25, f'A{idx+1}', fontsize=12, 
+                    fontweight='bold', ha='center')
+        # Draw pointing arrow (x-y projection)
+        theta_rad = np.radians(theta_ant[idx])
+        phi_rad   = np.radians(phi_ant[idx])
+        dx = np.cos(theta_rad) * np.cos(phi_rad)
+        dy = np.cos(theta_rad) * np.sin(phi_rad)
+        proj_mag = np.sqrt(dx**2 + dy**2)
+        if proj_mag > 1e-6:
+            ax1.arrow(xpos[idx], ypos[idx], dx*0.5, dy*0.5,
+                     head_width=0.18, head_length=0.1, fc='green', ec='green',
+                     linewidth=2, length_includes_head=True)
     
     # Draw square connecting antennas
     square_x = [xpos[0], xpos[1], xpos[2], xpos[3], xpos[0]]
@@ -173,20 +197,25 @@ def drawWavefrontPlanes(incoming_wave=False, phi=0, theta=0):
     for idx in range(num_antennas):
         ax2.scatter(xpos[idx], zpos[idx], marker='^', color='blue', s=300,
                    alpha=0.8, edgecolors='black', linewidth=2)
-        # Draw nadir pointing arrows
-        ax2.arrow(xpos[idx], zpos[idx], 0, -0.5, 
+        # Draw antenna pointing arrows (x-z projection)
+        theta_rad = np.radians(theta_ant[idx])
+        phi_rad = np.radians(phi_ant[idx])
+        dx = np.cos(theta_rad) * np.cos(phi_rad)
+        dz = np.sin(theta_rad)
+        ax2.arrow(xpos[idx], zpos[idx], dx*0.5, dz*0.5,
                  head_width=0.2, head_length=0.08, fc='green', ec='green', linewidth=2)
         
         # Offset labels for antennas at same x position
-        x_key = round(xpos[idx], 2)
-        if len(x_groups[x_key]) > 1:
-            offset_idx = x_groups[x_key].index(idx)
-            x_offset = -0.3 + offset_idx * 0.6  # Spread labels left and right
-            ax2.text(xpos[idx] + x_offset, zpos[idx]+0.12, f'A{idx+1}', fontsize=12, 
-                    fontweight='bold', ha='center')
-        else:
-            ax2.text(xpos[idx], zpos[idx]+0.12, f'A{idx+1}', fontsize=12, 
-                    fontweight='bold', ha='center')
+        if show_labels:
+            x_key = round(xpos[idx], 2)
+            if len(x_groups[x_key]) > 1:
+                offset_idx = x_groups[x_key].index(idx)
+                x_offset = -0.3 + offset_idx * 0.6  # Spread labels left and right
+                ax2.text(xpos[idx] + x_offset, zpos[idx]+0.12, f'A{idx+1}', fontsize=12, 
+                        fontweight='bold', ha='center')
+            else:
+                ax2.text(xpos[idx], zpos[idx]+0.12, f'A{idx+1}', fontsize=12, 
+                        fontweight='bold', ha='center')
     
     # Draw incoming wave direction (X-Z projection)
     if incoming_wave:
@@ -224,20 +253,31 @@ def drawWavefrontPlanes(incoming_wave=False, phi=0, theta=0):
     for idx in range(num_antennas):
         ax3.scatter(ypos[idx], zpos[idx], marker='^', color='blue', s=300,
                    alpha=0.8, edgecolors='black', linewidth=2)
-        # Draw nadir pointing arrows
-        ax3.arrow(ypos[idx], zpos[idx], 0, -0.5, 
-                 head_width=0.2, head_length=0.08, fc='green', ec='green', linewidth=2)
+        # Draw antenna pointing arrows (y-z projection)
+        theta_rad = np.radians(theta_ant[idx])
+        phi_rad = np.radians(phi_ant[idx])
+        dy = np.cos(theta_rad) * np.sin(phi_rad)
+        dz = np.sin(theta_rad)
+        proj_mag = np.sqrt(dy**2 + dz**2)
+        if proj_mag > 1e-6:
+            ax3.arrow(ypos[idx], zpos[idx], dy*0.5, dz*0.5,
+                     head_width=0.2, head_length=0.08, fc='green', ec='green', linewidth=2)
+        else:
+            # Pointing direction is perpendicular to this plane (pure +X when phi=0, theta=0)
+            ax3.annotate('→X', xy=(ypos[idx], zpos[idx]), fontsize=9, color='green',
+                        ha='center', va='center', fontweight='bold')
         
         # Offset labels for antennas at same y position
-        y_key = round(ypos[idx], 2)
-        if len(y_groups[y_key]) > 1:
-            offset_idx = y_groups[y_key].index(idx)
-            y_offset = -0.3 + offset_idx * 0.6  # Spread labels left and right
-            ax3.text(ypos[idx] + y_offset, zpos[idx]+0.12, f'A{idx+1}', fontsize=12, 
-                    fontweight='bold', ha='center')
-        else:
-            ax3.text(ypos[idx], zpos[idx]+0.12, f'A{idx+1}', fontsize=12, 
-                    fontweight='bold', ha='center')
+        if show_labels:
+            y_key = round(ypos[idx], 2)
+            if len(y_groups[y_key]) > 1:
+                offset_idx = y_groups[y_key].index(idx)
+                y_offset = -0.3 + offset_idx * 0.6  # Spread labels left and right
+                ax3.text(ypos[idx] + y_offset, zpos[idx]+0.12, f'A{idx+1}', fontsize=12, 
+                        fontweight='bold', ha='center')
+            else:
+                ax3.text(ypos[idx], zpos[idx]+0.12, f'A{idx+1}', fontsize=12, 
+                        fontweight='bold', ha='center')
     
     # Draw incoming wave direction (Y-Z projection)
     if incoming_wave:
@@ -268,7 +308,7 @@ def drawWavefrontPlanes(incoming_wave=False, phi=0, theta=0):
 Number of Antennas: {num_antennas}
 Array Type: Square
 Array Size: {2*np.sqrt(2):.2f} m × {2*np.sqrt(2):.2f} m
-Antenna Pointing: Nadir (downward)
+Antenna Pointing: per phi_ant/theta_ant
 
 Antenna Positions:
   A1: ({xpos[0]:+.2f}, {ypos[0]:+.2f}, {zpos[0]:+.2f}) m
@@ -281,7 +321,7 @@ Wavefront Direction:
   θ (elevation): {theta}°
   Unit vector: ({x_planewave:.3f}, {y_planewave:.3f}, {z_planewave:.3f})
 
-Green arrows: Antenna pointing (nadir)
+Green arrows: Antenna pointing (phi_ant, theta_ant)
 Red arrows: Incoming wave direction'''
     
     fig.text(0.65, 0.1, info_text, fontsize=10, verticalalignment='bottom',
@@ -295,5 +335,5 @@ Red arrows: Incoming wave direction'''
     plt.show()
 
 if __name__=='__main__':
-    drawWavefrontPlanes(incoming_wave=True, phi=0, theta=-45)
-    drawPayload(incoming_wave=False, phi=90, theta=0)
+    drawWavefrontPlanes(incoming_wave=True, phi=20, theta=-10, show_labels= False)
+    #drawPayload(incoming_wave=False, phi=90, theta=0)

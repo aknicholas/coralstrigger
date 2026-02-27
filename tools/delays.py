@@ -40,7 +40,7 @@ def scanDelays(phi, theta):
 def getDelays(phi, theta, antennas=None, verbose=True):
     '''
     specify phi and theta values (scalars)
-    and list of antennas of interest (default is all 4)
+    and list of antennas of interest (default is all)
     print relative delays to terminal if verbose=True
     '''
     if antennas is None:
@@ -169,13 +169,14 @@ if __name__=='__main__':
     for i in range(corals.num_antennas):
         print(f'  Ant{i+1}: ({corals.xpos[i]:.2f}, {corals.ypos[i]:.2f}, {corals.zpos[i]:.2f}) m')
     
-    phi = 3
-    theta = -80
-    antennas_of_interest = [0, 1, 2, 3]  # All 4 antennas
+    phi = 100
+    theta = 10
+    antennas_of_interest = list(range(corals.num_antennas))  # all channels
     getDelays(phi, theta, antennas_of_interest, verbose=True)
 
     sample_dt_ns = corals.ritc_sample_step
+    # recommended_angle_steps only needs the 4 physical positions (ch0-3; ch4-7 are co-located)
     min_phi_step, min_theta_step = recommended_angle_steps(
-        phi, theta, antennas_of_interest, sample_dt_ns=sample_dt_ns, decimation_ps=250)
+        phi, theta, [0, 1, 2, 3], sample_dt_ns=sample_dt_ns, decimation_ps=250)
     print(f"Minimum phi step for 1 sample change: {min_phi_step} deg")
     print(f"Minimum theta step for 1 sample change: {min_theta_step} deg")

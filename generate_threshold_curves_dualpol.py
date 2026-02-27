@@ -1,13 +1,6 @@
 """
 Generate threshold curves for dual-polarization coincidence trigger.
 
-Sprint 4: Threshold Analysis
-- Loads LHCP and RHCP power sums
-- Scans thresholds to measure per-beam false trigger rates
-- Fits exponential curves: Rate(T) = A * exp(-B * T)
-- Computes coincidence rate with N_beams beams
-- Solves for thresholds that give target global rate (e.g., 0.1 Hz)
-
 Usage:
     python generate_threshold_curves_dualpol.py --n-beams 100 --target-rate 0.1
 """
@@ -167,21 +160,24 @@ def main():
                        help='Min threshold for fit region (overrides auto-detection)')
     parser.add_argument('--fit-thr-max', type=float, default=None,
                        help='Max threshold for fit region (overrides auto-detection)')
-    parser.add_argument('--fit-min-hits', type=float, default=100,
+    parser.add_argument('--fit-min-hits', type=float, default=3,
                        help='Min hits for auto fit region')
-    parser.add_argument('--fit-max-hits', type=float, default=1e6,
+    parser.add_argument('--fit-max-hits', type=float, default=2e4,
                        help='Max hits for auto fit region')
     parser.add_argument('--output-dir', default='noise', help='Output directory')
     parser.add_argument('--plot', action='store_true', help='Generate plots')
     parser.add_argument('--plot-thr-max', type=float, default=3.5, 
                        help='Max threshold to show in plots (default 3.5)')
+    parser.add_argument('--compare-suffix', type=str, default=None,
+                       help='Load a second set of power files with this suffix for sanity-check overlay, '
+                            'e.g. "_nofilter" to compare filtered vs unfiltered noise rates')
     
     args = parser.parse_args()
     
     print("=" * 70)
     print("DUAL-POL THRESHOLD CURVE ANALYSIS")
     print("=" * 70)
-    print(f"Sprint 4: N_beams = {args.n_beams} (placeholder)")
+    print(f"N_beams = {args.n_beams}")
     print(f"Coincidence window: {args.coincidence_window} ns")
     print("")
     
@@ -457,7 +453,55 @@ def main():
         plt.savefig(plot_file, dpi=150)
         print(f"Saved: {plot_file}")
         plt.show()
-    
+
+    # -------------------------------------------------------------------------
+    # Optional comparison: overlay a second power file (e.g. unfiltered)
+    # -------------------------------------------------------------------------
+    if args.compare_suffix is not None:
+        sfx = args.compare_suffix
+        cmp_lhcp_file = noise_path / f'power_lhcp_{args.window}_{args.step}{sfx}.npy'
+        cmp_rhcp_file = noise_path / f'power_rhcp_{args.window}_{args.step}{sfx}.npy'
+
+        if not cmp_lhcp_file.exists() or not cmp_rhcp_file.exists():
+            print(f"\nWarning: comparison files not found ({cmp_lhcp_file}), skipping compare plot.")
+        else:
+            cmp_lhcp = np.load(cmp_lhcp_file)
+            cmp_rhcp = np.load(cmp_rhcp_file)
+            cmp_obs = len(cmp_lhcp) * dt
+
+            cmp_hits_lhcp = np.array([(cmp_lhcp >= thr).sum() for thr in thresholds])
+            cmp_hits_rhcp = np.array([(cmp_rhcp >= thr).sum() for thr in thresholds])
+            cmp_rate_lhcp = cmp_hits_lhcp / cmp_obs
+            cmp_rate_rhcp = cmp_hits_rhcp / cmp_obs
+
+            print(f"\n--- Comparison ({sfx}) ---")
+            print(f"  LHCP: {cmp_hits_lhcp.sum():,} total hits over {cmp_obs:.3f} sec")
+            print(f"  RHCP: {cmp_hits_rhcp.sum():,} total hits over {cmp_obs:.3f} sec")
+
+            # Overlay plot
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+            label_base = 'filtered (default)'
+            label_cmp = sfx.strip('_')
+
+            for ax, r_base, r_cmp, pol in [
+                (ax1, rate_lhcp, cmp_rate_lhcp, 'LHCP'),
+                (ax2, rate_rhcp, cmp_rate_rhcp, 'RHCP')
+            ]:
+                pm = thresholds <= args.plot_thr_max
+                ax.semilogy(thresholds[pm], r_base[pm], 'b-o', ms=3, lw=1.5, label=label_base)
+                ax.semilogy(thresholds[pm], r_cmp[pm], 'r--s', ms=3, lw=1.5, label=label_cmp)
+                ax.set_xlabel('Threshold (normalized power)')
+                ax.set_ylabel('Per-beam Rate [Hz]')
+                ax.set_title(f'{pol} noise rate: filter comparison')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            cmp_plot_file = output_path / f'threshold_compare{sfx}.png'
+            plt.savefig(cmp_plot_file, dpi=150)
+            print(f"Saved: {cmp_plot_file}")
+            plt.show()
+
     print("=" * 70)
 
 

@@ -65,169 +65,126 @@ def coherentSum(waveforms, timebase, delays, downsample=False, channel_mask=None
     return coh_sum, timebase
 
 
-def coherentSum_dualpol(waveforms_h, waveforms_v, timebase, delays, 
+def coherentSum_dualpol(waveforms_h, waveforms_v, timebase, delays,
                         downsample=True, channel_mask=None, output='circular',
-                        apply_filter=True, digitize_first=True, return_intermediates=False):
+                        apply_filter=True, digitize_first=True,
+                        return_intermediates=False):
     '''
     Coherent sum for dual polarization with circular basis conversion.
-    
-    Hardware signal chain (when digitize_first=True, matching actual hardware):
+
+    Hardware signal chain:
     1. Downsample/digitize to 4 GHz ADC rate (if downsample=True)
-    2. Apply Shannon-Whitaker digital lowpass filter at 4 GHz (if apply_filter=True)
+    2. Apply Shannon-Whitaker digital lowpass filter (if apply_filter=True)
     3. Apply geometric delays and coherent sum each polarization
     4. FFT to frequency domain for circular polarization conversion
-    5. Apply π/2 phase shift to V-pol (multiply by j in frequency domain)
+    5. Apply π/2 phase shift to V-pol (multiply by j)
     6. Compute LHCP = (H + j*V)/√2 and RHCP = (H - j*V)/√2
     7. IFFT back to time domain
-    
-    Legacy mode (when digitize_first=False):
-    1. Apply filter to each antenna before summing (old behavior)
-    2. Coherent sum
-    3. Circular conversion
-    
+
     Args:
-        waveforms_h: (n_antennas, n_samples) H-pol array (real voltages)
-        waveforms_v: (n_antennas, n_samples) V-pol array (real voltages)
+        waveforms_h: (n_antennas, n_samples) H-pol array
+        waveforms_v: (n_antennas, n_samples) V-pol array
         timebase: time array (ns)
         delays: (n_antennas,) delay array (ns) - same for both pols
-        downsample: if True, downsample to RITC sampling rate (4 GHz)
+        downsample: if True, decimate to RITC sampling rate (4 GHz)
         channel_mask: optional boolean mask for which antennas to include
         apply_filter: if True, apply Shannon-Whitaker FIR filter
-        digitize_first: if True, digitize then filter (hardware order); 
-                       if False, filter per-antenna then sum (legacy)
-        output: 'separate' | 'circular' (default: 'circular')
-            'separate': return (coh_h, coh_v) in H/V basis (real signals)
-            'circular': return (lhcp, rhcp) in circular basis (real signals from irfft)
-        return_intermediates: if True, return dict with all intermediate processing steps
-    
-    Returns:
-        If return_intermediates=False (default):
-            Depends on output mode:
-            - 'separate': (coh_h, coh_v, timebase) - both real arrays
-            - 'circular': (lhcp, rhcp, timebase) - both real arrays
-        
-        If return_intermediates=True:
-            Returns tuple: (result1, result2, timebase, intermediates_dict)
-            where (result1, result2) is (lhcp, rhcp) or (coh_h, coh_v) depending on output mode,
-            and intermediates_dict contains all diagnostic data from processing steps
-    
-    Note: The circular conversion uses frequency-domain phase shift (π/2 for V-pol)
-          which is the mathematically correct and computationally efficient way to
-          implement the Hilbert transform needed for circular polarization.
+        digitize_first: if True (default), decimate before filtering (hardware order)
+        output: 'separate' | 'circular'
+            'separate': return (coh_h, coh_v, timebase)
+            'circular': return (lhcp, rhcp, timebase)
+        return_intermediates: if True, append an intermediates dict to the return tuple
+
+    Returns (without return_intermediates):
+        - 'separate': (coh_h, coh_v, timebase)
+        - 'circular': (lhcp, rhcp, timebase)
+    Returns (with return_intermediates=True):
+        same as above but with an extra intermediates dict appended
     '''
-    if digitize_first:
-        # HARDWARE ORDER: Digitize → Filter → Sum → Circular
-        # This matches the actual hardware signal chain
-        
-        # Initialize intermediates dict if requested
-        intermediates = {} if return_intermediates else None
-        
-        # Step 1: Digitize/downsample to 4 GHz if requested
-        if downsample:
-            import tools.CoRaLs_geometry as aso_geometry
-            decimate_factor = int(aso_geometry.ritc_sample_step / (timebase[1] - timebase[0]))
-            waveforms_h_dig = waveforms_h[:, ::decimate_factor]
-            waveforms_v_dig = waveforms_v[:, ::decimate_factor]
-            timebase = timebase[::decimate_factor]
-            if return_intermediates:
-                intermediates['decimate_factor'] = decimate_factor
-                dt_adc = (timebase[1] - timebase[0]) * 1e-9  # ns to s
-                intermediates['fs_adc'] = 1.0 / dt_adc
-        else:
-            waveforms_h_dig = waveforms_h
-            waveforms_v_dig = waveforms_v
-            if return_intermediates:
-                intermediates['decimate_factor'] = 1
-                dt_adc = (timebase[1] - timebase[0]) * 1e-9
-                intermediates['fs_adc'] = 1.0 / dt_adc
-        
-        # Step 2: Apply digital lowpass filter at digitized rate
-        if apply_filter:
-            waveforms_h_filt = filters.apply_Shannon_Whitaker_filter(waveforms_h_dig)
-            waveforms_v_filt = filters.apply_Shannon_Whitaker_filter(waveforms_v_dig)
-        else:
-            waveforms_h_filt = waveforms_h_dig
-            waveforms_v_filt = waveforms_v_dig
-        
-        # Step 3: Coherent sum each polarization (real signals)
-        coh_h, tb = coherentSum(waveforms_h_filt, timebase, delays, downsample=False, channel_mask=channel_mask)
-        coh_v, _  = coherentSum(waveforms_v_filt, timebase, delays, downsample=False, channel_mask=channel_mask)
-        
-        if return_intermediates:
-            intermediates['coh_h_digitized'] = coh_h.copy()
-            intermediates['coh_v_digitized'] = coh_v.copy()
-            if apply_filter:
-                # Store filtered versions (these are the same as coh_h/coh_v since filtering was applied before sum)
-                intermediates['coh_h_filtered'] = coh_h.copy()
-                intermediates['coh_v_filtered'] = coh_v.copy()
-        
+
+    # HARDWARE ORDER: Digitize → Filter → Sum → Circular
+
+    # Step 1: Digitize/downsample to 4 GHz
+    dt_in = timebase[1] - timebase[0]
+    decimate_factor = int(aso_geometry.ritc_sample_step / dt_in) if downsample else 1
+    fs_adc = 1.0 / (dt_in * decimate_factor) * 1e9  # Hz
+
+    if downsample:
+        waveforms_h_dig = waveforms_h[:, ::decimate_factor]
+        waveforms_v_dig = waveforms_v[:, ::decimate_factor]
+        timebase = timebase[::decimate_factor]
     else:
-        # LEGACY ORDER: Filter per-antenna → Sum → Circular
-        intermediates = {} if return_intermediates else None
-        
-        # Apply digital lowpass filter to each antenna before summing
-        if apply_filter:
-            waveforms_h_filtered = filters.apply_Shannon_Whitaker_filter(waveforms_h)
-            waveforms_v_filtered = filters.apply_Shannon_Whitaker_filter(waveforms_v)
-        else:
-            waveforms_h_filtered = waveforms_h
-            waveforms_v_filtered = waveforms_v
-        
-        # Coherent sum each polarization independently (real signals)
-        coh_h, tb = coherentSum(waveforms_h_filtered, timebase, delays, downsample, channel_mask)
-        coh_v, _  = coherentSum(waveforms_v_filtered, timebase, delays, downsample, channel_mask)
-        
-        if return_intermediates:
-            intermediates['coh_h_digitized'] = coh_h.copy()
-            intermediates['coh_v_digitized'] = coh_v.copy()
-            if apply_filter:
-                intermediates['coh_h_filtered'] = coh_h.copy()
-                intermediates['coh_v_filtered'] = coh_v.copy()
-    
+        waveforms_h_dig = waveforms_h
+        waveforms_v_dig = waveforms_v
+
+    # Step 2: Apply digital lowpass filter
+    if apply_filter:
+        waveforms_h_filt = filters.apply_Shannon_Whitaker_filter(waveforms_h_dig)
+        waveforms_v_filt = filters.apply_Shannon_Whitaker_filter(waveforms_v_dig)
+    else:
+        waveforms_h_filt = waveforms_h_dig
+        waveforms_v_filt = waveforms_v_dig
+
+    # Step 3: Coherent sum each polarization (real signals)
+    coh_h, tb = coherentSum(waveforms_h_filt, timebase, delays, downsample=False, channel_mask=channel_mask)
+    coh_v, _  = coherentSum(waveforms_v_filt, timebase, delays, downsample=False, channel_mask=channel_mask)
+
+    # Capture post-digitize / post-filter sums for diagnostics
+    coh_h_digitized, _ = coherentSum(waveforms_h_dig, timebase, delays, downsample=False, channel_mask=channel_mask)
+    coh_v_digitized, _ = coherentSum(waveforms_v_dig, timebase, delays, downsample=False, channel_mask=channel_mask)
+
     if output == 'separate':
+        result = (coh_h, coh_v, tb)
         if return_intermediates:
-            return coh_h, coh_v, tb, intermediates
-        else:
-            return coh_h, coh_v, tb
-    
+            inter = {
+                'coh_h_digitized': coh_h_digitized,
+                'coh_v_digitized': coh_v_digitized,
+                'coh_h_filtered':  coh_h,
+                'coh_v_filtered':  coh_v,
+                'decimate_factor': decimate_factor,
+                'fs_adc':          fs_adc,
+            }
+            return result + (inter,)
+        return result
+
     elif output == 'circular':
-        # Convert to circular polarization using frequency-domain phase shift
-        # This is the physically correct implementation:
-        # 1. FFT both H and V (real → complex frequency domain)
-        # 2. Apply π/2 phase shift to V by multiplying by j in frequency domain
-        # 3. Combine: LHCP = (H + j*V)/√2, RHCP = (H - j*V)/√2
-        # 4. IFFT back to time domain
-        
-        # Transform to frequency domain
-        H_fft = numpy.fft.rfft(coh_h)  # Real FFT (saves memory)
+        # Step 4-6: FFT → phase shift V → circular decomposition
+        H_fft = numpy.fft.rfft(coh_h)
         V_fft = numpy.fft.rfft(coh_v)
-        
+        freqs  = numpy.fft.rfftfreq(len(coh_h), d=(tb[1] - tb[0]) * 1e-9)  # Hz
+
         # Apply π/2 phase shift to V-pol: multiply by j = exp(j*π/2)
         V_shifted = 1j * V_fft
-        
+
         # Combine into circular basis
         LHCP_fft = (H_fft + V_shifted) / numpy.sqrt(2)
         RHCP_fft = (H_fft - V_shifted) / numpy.sqrt(2)
-        
-        # Transform back to time domain (irfft returns real signals)
+
+        # Step 7: IFFT back to time domain
         lhcp = numpy.fft.irfft(LHCP_fft, n=len(coh_h))
         rhcp = numpy.fft.irfft(RHCP_fft, n=len(coh_h))
-        
+
+        result = (lhcp, rhcp, tb)
         if return_intermediates:
-            dt_adc = (tb[1] - tb[0]) * 1e-9  # ns to s
-            intermediates['H_fft'] = H_fft
-            intermediates['V_fft'] = V_fft
-            intermediates['V_shifted'] = V_shifted
-            intermediates['LHCP_fft'] = LHCP_fft
-            intermediates['RHCP_fft'] = RHCP_fft
-            intermediates['freqs'] = numpy.fft.rfftfreq(len(coh_h), d=dt_adc)
-            return lhcp, rhcp, tb, intermediates
-        else:
-            return lhcp, rhcp, tb
-    
+            inter = {
+                'coh_h_digitized': coh_h_digitized,
+                'coh_v_digitized': coh_v_digitized,
+                'coh_h_filtered':  coh_h,
+                'coh_v_filtered':  coh_v,
+                'H_fft':           H_fft,
+                'V_fft':           V_fft,
+                'V_shifted':       V_shifted,
+                'LHCP_fft':        LHCP_fft,
+                'RHCP_fft':        RHCP_fft,
+                'freqs':           freqs,
+                'decimate_factor': decimate_factor,
+                'fs_adc':          fs_adc,
+            }
+            return result + (inter,)
+        return result
+
     else:
         raise ValueError(f"Unknown output mode: {output}. Use 'separate' or 'circular'.")
-
 
 def check_coincidence(triggers_lhcp, triggers_rhcp, min_overlap_frames=2, 
                       max_gap_frames=1):
@@ -273,7 +230,6 @@ def check_coincidence(triggers_lhcp, triggers_rhcp, min_overlap_frames=2,
                 trigger_indices.append(start)  # Trigger on first coincidence frame
     
     return trigger_indices, trigger_windows
-
 
 def compute_coincidence_rate(rate_lhcp, rate_rhcp, window_time_ns=100):
     '''
@@ -321,12 +277,12 @@ def powerSum(coh_sum, window=32, step=16):
     if len(coh_sum) < window:
         raise ValueError(f"Input length {len(coh_sum)} smaller than window {window}")
 
-    # number of frames (include the first valid window)
+    # number of frames )
     num_frames = int((len(coh_sum) - window) // step) + 1
     if num_frames <= 0:
         raise ValueError("Computed num_frames <= 0; check window/step/length")
 
-    # Power: handle complex properly (|v|^2), keep float precision
+    # Power: handle complex (|v|^2)
     coh_power = numpy.abs(coh_sum)**2
 
     # Strided windows
@@ -450,19 +406,19 @@ if __name__ == '__main__':
     print(f"  Mean power: {numpy.mean(power):.3e}")
     
     # =========================================================================
-    # TEST: Dual-pol with true H/V decomposition (Sprint 2)
+    # TEST: Dual-pol with H/V decomposition 
     # =========================================================================
     print(f"\n" + "=" * 70)
     print(f"TEST: Dual-pol with real H/V decomposition")
     print("=" * 70)
     
-    # Use true H and V waveforms (no longer placeholders!)
-    print(f"  Using real H-pol and V-pol waveforms from getPayloadWaveforms_dualpol()")
+    # Use H and V waveforms
+    print(f"  Using H-pol and V-pol waveforms from getPayloadWaveforms_dualpol()")
     
     # Compute LHCP and RHCP using hardware-correct signal chain
     lhcp, rhcp, tb_dualpol = coherentSum_dualpol(
         waveforms_h, waveforms_v, timebase, delays, 
-        downsample=True, apply_filter=True, digitize_first=True,
+        downsample=True, apply_filter=True,
         output='circular'
     )
     
@@ -564,18 +520,5 @@ if __name__ == '__main__':
         plt.tight_layout()
         output_file = 'plots/coherent_sum_real_impulse.png'
         plt.savefig(output_file, dpi=150)
-        print(f"✓ Plots saved to: {output_file}")
+        print(f" Plots saved to: {output_file}")
         plt.show()
-    
-    # =========================================================================
-    # SUMMARY
-    # =========================================================================
-    print(f"\n" + "=" * 70)
-    print("BENCHMARK COMPLETE")
-    print("=" * 70)
-    print(f"✓ Real impulse data processed successfully")
-    print(f"✓ Coherent sum validated with {waveforms_h.shape[0]} antennas")
-    print(f"✓ Dual-pol with true H/V decomposition (Sprint 2 complete!)")
-    print(f"✓ Coincidence trigger logic validated")
-    print(f"\nSprint 2: ✅ COMPLETE - True H-pol and V-pol waveforms generated")
-    print("=" * 70)
