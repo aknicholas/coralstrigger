@@ -901,11 +901,12 @@ def compute_beam_pattern_dualpol(phi_c, th_c, span_phi=45, span_theta=45, res_de
             waveforms_v = waveforms[4:]
             
             # Apply coherent beamforming (converts to LHCP/RHCP)
-            # Use hardware-correct order: digitize → filter → sum → circular
+            # Use hardware-correct order: digitize → filter → 2nd filter → sum → circular
             lhcp_wf, rhcp_wf, tb = sum.coherentSum_dualpol(
                 waveforms_h, waveforms_v, timebase, delays_center_q,
                 downsample=False, channel_mask=ringmask, output='circular',
-                apply_filter=True, digitize_first=True
+                apply_filter=True, digitize_first=True,
+                apply_second_filter=True, fc_second=750e6
             )
             
             # Compute sliding-window power

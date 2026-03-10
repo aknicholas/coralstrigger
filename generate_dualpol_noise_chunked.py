@@ -184,10 +184,10 @@ if __name__ == '__main__':
                         help='Output directory (default: noise/)')
     parser.add_argument('--vrms', type=float, default=1.0,
                         help='RMS voltage (default: 1.0)')
-    parser.add_argument('--fmin', type=float, default=0.26,
-                        help='Minimum frequency in GHz (default: 0.26)')
-    parser.add_argument('--fmax', type=float, default=0.95,
-                        help='Maximum frequency in GHz (default: 0.95)')
+    parser.add_argument('--fmin', type=float, default=0.1,
+                        help='Minimum frequency in GHz (default: 0.1)')
+    parser.add_argument('--fmax', type=float, default=2.0,
+                        help='Maximum frequency in GHz (default: 2.0)')
     
     args = parser.parse_args()
     

@@ -1,42 +1,41 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import CoRaLs_geometry as corals
+from . import CoRaLs_geometry as corals
 
-def get_Shannon_Whitaker_coeffs(fs=corals.ritc_sample_rate*1e9):
+def get_Shannon_Whitaker_coeffs(fs=corals.ritc_sample_rate*1e9, fc=1.5e9):
     """
-    Get the Shannon-Whitaker FIR filter coefficients.
+    Get the Shannon-Whitaker FIR lowpass filter coefficients.
     Returns normalized tap coefficients as 1D array (length 33).
+
+    Args:
+        fs: sampling frequency in Hz (default: RITC sample rate)
+        fc: cutoff frequency in Hz (default: 1.5 GHz)
     """
-    # Define the integer coefficients:
-    b = np.array([
-         0,  -23,   0,  105,   0,  -263,   0,   526,
-         0,  -949,   0,  1672,   0, -3216,   0, 10342,
-      16384, 10342,   0, -3216,   0,  1672,   0,  -949,
-         0,   526,   0,  -263,   0,   105,   0,   -23
-    ], dtype=float)
-    
-    # Normalize to real taps:
-    h = b / 32768.0  # array length 33
+    n_taps = 33
+    n = np.arange(n_taps) - (n_taps - 1) / 2
+    fc_norm = 2.0 * fc / fs  # normalized cutoff (0–2, where 2 = fs)
+    h = fc_norm * np.sinc(fc_norm * n) * np.hamming(n_taps)
     return h
 
 
-def apply_Shannon_Whitaker_filter(waveforms, fs=corals.ritc_sample_rate*1e9):
+def apply_Shannon_Whitaker_filter(waveforms, fs=corals.ritc_sample_rate*1e9, fc=1.5e9):
     """
     Apply Shannon-Whitaker FIR lowpass filter to waveforms.
-    
+
     This is the digital anti-aliasing filter implemented in hardware.
     Should be applied to both signal and noise after beamforming.
-    
+
     Args:
         waveforms: 1D or 2D array (samples) or (channels, samples)
         fs: sampling frequency in Hz (default: 4 GHz)
-    
+        fc: lowpass cutoff frequency in Hz (default: 1.5 GHz)
+
     Returns:
         filtered: same shape as input
     """
     from scipy.signal import lfilter
-    
-    h = get_Shannon_Whitaker_coeffs(fs)
+
+    h = get_Shannon_Whitaker_coeffs(fs, fc)
     
     # Handle both 1D and 2D arrays
     if waveforms.ndim == 1:
@@ -51,13 +50,13 @@ def apply_Shannon_Whitaker_filter(waveforms, fs=corals.ritc_sample_rate*1e9):
         raise ValueError(f"Expected 1D or 2D array, got shape {waveforms.shape}")
 
 
-def Shannon_Whitaker(fs=corals.ritc_sample_rate*1e9, plot=True):
+def Shannon_Whitaker(fs=corals.ritc_sample_rate*1e9, fc=1.5e9, plot=True):
     """
     Compute the frequency response of the Shannon–Whitaker FIR filter.
     Returns (freqs, H_mag_db, cutoff_freq).
     """
     # Get filter coefficients
-    h = get_Shannon_Whitaker_coeffs(fs)
+    h = get_Shannon_Whitaker_coeffs(fs, fc)
 
     # 3) Choose a fine FFT length for smooth plot:
     M = 4096
@@ -141,7 +140,7 @@ def get_bandpass_coeffs(f_low, f_high, n_taps=33, fs=corals.ritc_sample_rate*1e9
     return h
 
 
-def apply_bandpass_filter(waveforms, f_low, f_high, n_taps=33,
+def apply_bandpass_filter(waveforms, f_low = 1e6, f_high=1200e6, n_taps=33,
                           fs=corals.ritc_sample_rate*1e9, window='hamming'):
     """
     Apply a windowed-sinc bandpass FIR filter to waveforms.

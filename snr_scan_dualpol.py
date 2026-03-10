@@ -25,7 +25,8 @@ import os
 
 def run_snr_scan_dualpol(phi, theta, psi, threshold_lhcp, threshold_rhcp, coincidence_window,
                          snr_grid, n_trials, window, step, save_filename=None,
-                         single_ant_threshold=None, antennas=None):
+                         single_ant_threshold=None, antennas=None,
+                         apply_second_filter=None):
     """
     Run SNR efficiency scan for dual-pol at a single direction.
 
@@ -54,11 +55,16 @@ def run_snr_scan_dualpol(phi, theta, psi, threshold_lhcp, threshold_rhcp, coinci
     antennas : list of int or None
         Physical antenna indices to use, e.g. [0] for single-antenna or
         [0,1,2,3] for full array (default: all four).
+    apply_second_filter : bool or None
+        Apply second 750 MHz lowpass filter after beamforming.  None means
+        use the module-level toggle payload.APPLY_SECOND_FILTER.
 
     Returns:
     --------
-    dict with keys: snr, eff_lhcp, eff_rhcp, eff_coinc, n_ant
+    dict with keys: snr, eff_lhcp, eff_rhcp, eff_coinc, n_ant, apply_second_filter
     """
+    if apply_second_filter is None:
+        apply_second_filter = payload.APPLY_SECOND_FILTER
     
     print(f"\n=== SNR Scan at (phi={phi:.1f}°, theta={theta:.1f}°, psi={psi:.1f}°) ===")
     print(f"LHCP threshold: {threshold_lhcp:.3f}")
@@ -73,6 +79,7 @@ def run_snr_scan_dualpol(phi, theta, psi, threshold_lhcp, threshold_rhcp, coinci
     n_ant = len(antennas)
 
     print(f"Using {n_ant} antennas per polarization: {antennas}")
+    print(f"Second filter (750 MHz): {'ENABLED' if apply_second_filter else 'DISABLED'}")
     if single_ant_threshold is not None:
         print(f"  (--single-ant-threshold is deprecated; use --ant-scan instead)")
     
@@ -196,8 +203,10 @@ def run_snr_scan_dualpol(phi, theta, psi, threshold_lhcp, threshold_rhcp, coinci
             # Beamform and convert to circular polarizations
             # Hardware signal chain: digitize → filter @ 4 GHz → sum → circular
             lhcp, rhcp, tb_coinc = trigger.coherentSum_dualpol(
-                injected_h, injected_v, timebase, delays_array, 
+                injected_h, injected_v, timebase, delays_array,
                 downsample=True, apply_filter=True, digitize_first=True,
+                apply_second_filter=apply_second_filter,
+                fc_second=payload.FC_SECOND_FILTER,
                 output='circular'
             )
             
@@ -280,6 +289,7 @@ def run_snr_scan_dualpol(phi, theta, psi, threshold_lhcp, threshold_rhcp, coinci
         'n_trials': n_trials,
         'n_ant': n_ant,
         'antennas': antennas,
+        'apply_second_filter': apply_second_filter,
     }
     
     # Save data
@@ -394,6 +404,9 @@ def plot_multi_scurves(results_list, save_filename=None):
     }
     # One colour per unique antenna count (tab10 first four: blue, orange, green, red)
     ANT_COLORS = {1: '#1f77b4', 2: '#ff7f0e', 3: '#2ca02c', 4: '#d62728'}
+    # When comparing filter states, use color=filter state, linestyle=n_ant
+    FILTER_COLORS = {False: '#1f77b4', True: '#d62728'}     # blue=no 2nd filter, red=with 2nd filter
+    NANT_STYLES   = {1: ':', 2: '--', 3: '-.', 4: '-'}
 
     fig, ax = plt.subplots(figsize=(11, 7))
 
@@ -402,28 +415,37 @@ def plot_multi_scurves(results_list, save_filename=None):
     psi   = results_list[0]['psi']
 
     # Build ordered unique lists so rank is stable
-    unique_n_ants = sorted(set(r.get('n_ant', 4) for r in results_list))
-    unique_rates  = list(dict.fromkeys(
+    unique_n_ants  = sorted(set(r.get('n_ant', 4) for r in results_list))
+    unique_rates   = list(dict.fromkeys(
         r.get('target_global_rate_hz', None) for r in results_list
     ))
+    unique_filters = sorted(set(r.get('apply_second_filter', False) for r in results_list))
+    vary_by_filter = len(unique_filters) > 1
 
     for res in results_list:
-        snr       = res['snr']
-        eff_coinc = res['eff_coinc']
-        thr       = res['threshold_lhcp']
-        n_ant_r   = res.get('n_ant', 4)
-        rate      = res.get('target_global_rate_hz', None)
+        snr        = res['snr']
+        eff_coinc  = res['eff_coinc']
+        thr        = res['threshold_lhcp']
+        n_ant_r    = res.get('n_ant', 4)
+        rate       = res.get('target_global_rate_hz', None)
+        filt2      = res.get('apply_second_filter', False)
 
-        color      = ANT_COLORS.get(n_ant_r, '#888888')
-        rate_rank  = unique_rates.index(rate) if rate in unique_rates else 0
-        style      = RATE_STYLES.get(rate_rank, RATE_STYLES[0])
-
-        # Legend label: always include both n_ant and rate
-        if 'label' in res:
-            lbl = res['label']
+        if vary_by_filter:
+            # Color = filter state; linestyle = n_ant
+            color = FILTER_COLORS.get(filt2, '#888888')
+            ls    = NANT_STYLES.get(n_ant_r, '-')
+            style = dict(linestyle=ls, alpha=1.0)
+            filt_str = '1.5G+0.75G' if filt2 else '1.5G only'
+            lbl = f'{n_ant_r}-ant  {filt_str}  (T={thr:.3f})'
         else:
-            rate_str = f'{rate:.3g} Hz' if rate is not None else 'T only'
-            lbl = f'{n_ant_r}-ant  {rate_str}  (T={thr:.3f})'
+            color     = ANT_COLORS.get(n_ant_r, '#888888')
+            rate_rank = unique_rates.index(rate) if rate in unique_rates else 0
+            style     = RATE_STYLES.get(rate_rank, RATE_STYLES[0])
+            if 'label' in res:
+                lbl = res['label']
+            else:
+                rate_str = f'{rate:.3g} Hz' if rate is not None else 'T only'
+                lbl = f'{n_ant_r}-ant  {rate_str}  (T={thr:.3f})'
 
         ax.plot(snr, eff_coinc, color=color, linewidth=2, label=lbl, **style)
 
@@ -446,22 +468,31 @@ def plot_multi_scurves(results_list, save_filename=None):
     ax.set_xlim(results_list[0]['snr'][0] - 0.1, results_list[0]['snr'][-1] + 0.1)
     ax.grid(True, alpha=0.3)
 
-    # Sort legend: primary key = n_ant, secondary = rate rank
+    # Sort legend: primary key = n_ant, secondary = filter state
     handles, labels = ax.get_legend_handles_labels()
     sort_keys = []
     for res in results_list:
         n_ant_r  = res.get('n_ant', 4)
         rate     = res.get('target_global_rate_hz', None)
+        filt2    = int(res.get('apply_second_filter', False))
         rate_rank = unique_rates.index(rate) if rate in unique_rates else 0
-        sort_keys.append((n_ant_r, rate_rank))
+        sort_keys.append((n_ant_r, filt2, rate_rank))
     order = sorted(range(len(sort_keys)), key=lambda i: sort_keys[i])
     handles = [handles[i] for i in order]
     labels  = [labels[i]  for i in order]
-    ax.legend(handles, labels, loc='upper left', fontsize=9,
-              title='N-ant  rate  (threshold)')
+    legend_title = ('N-ant  filter  (threshold)' if vary_by_filter
+                    else 'N-ant  rate  (threshold)')
+    ax.legend(handles, labels, loc='upper left', fontsize=9, title=legend_title)
 
     vary_by_nant = len(unique_n_ants) > 1
-    subtitle = 'vs. N Antennas & Trigger Rate' if vary_by_nant else 'vs. Trigger Rate'
+    if vary_by_filter and vary_by_nant:
+        subtitle = 'vs. Filter & N Antennas'
+    elif vary_by_filter:
+        subtitle = 'vs. Filter Stage'
+    elif vary_by_nant:
+        subtitle = 'vs. N Antennas & Trigger Rate'
+    else:
+        subtitle = 'vs. Trigger Rate'
     title = (f'Dual-Pol S-Curves {subtitle}\n'
              f'(\u03c6={phi:.1f}\u00b0, \u03b8={theta:.1f}\u00b0, \u03c8={psi:.1f}\u00b0)')
     ax.set_title(title, fontsize=13)
@@ -524,6 +555,13 @@ if __name__ == '__main__':
     parser.add_argument('--ant-scan', action='store_true',
                        help='Run scans for 1, 2, 3, and 4 antennas and overlay S-curves '
                             'to show beamforming gain')
+    parser.add_argument('--filter-scan', action='store_true',
+                       help='Run scans with and without the second 750 MHz filter and '
+                            'overlay the S-curves side by side')
+    parser.add_argument('--second-filter', dest='second_filter', action='store_true', default=None,
+                       help='Force second 750 MHz filter ON (overrides payload.APPLY_SECOND_FILTER)')
+    parser.add_argument('--no-second-filter', dest='second_filter', action='store_false',
+                       help='Force second filter OFF')
 
     # Angular scan mode (future enhancement)
     parser.add_argument('--angle-scan', action='store_true',
@@ -533,6 +571,14 @@ if __name__ == '__main__':
 
     # Build SNR grid
     snr_grid = np.arange(args.snr_min, args.snr_max + 0.5*args.snr_step, args.snr_step)
+
+    # Resolve filter toggle
+    if args.filter_scan:
+        filter_configs = [False, True]   # run without then with second filter
+    elif args.second_filter is None:
+        filter_configs = [payload.APPLY_SECOND_FILTER]
+    else:
+        filter_configs = [args.second_filter]
 
     # -------------------------------------------------------------------------
     # JSON mode: run one scan per threshold entry and overlay all S-curves
@@ -563,31 +609,35 @@ if __name__ == '__main__':
             rate_label = entry.get('target_global_rate_hz', None)
 
             for ant_cfg in ant_configs:
-                n = len(ant_cfg) if ant_cfg is not None else 4
-                rate_tag = f"_rate{i}" if len(thr_entries) > 1 else ''
-                ant_tag  = f"_ant{n}"  if args.ant_scan else ''
-                save_tag = f"{args.save}{rate_tag}{ant_tag}"
+                for filt2 in filter_configs:
+                    n = len(ant_cfg) if ant_cfg is not None else 4
+                    rate_tag = f"_rate{i}" if len(thr_entries) > 1 else ''
+                    ant_tag  = f"_ant{n}"  if args.ant_scan else ''
+                    filt_tag = f"_filt{'2' if filt2 else '1'}" if args.filter_scan else ''
+                    save_tag = f"{args.save}{rate_tag}{ant_tag}{filt_tag}"
 
-                print(f"\n--- Entry {i}: LHCP={t_lhcp:.4f}  target={rate_label} Hz  "
-                      f"antennas={ant_cfg if ant_cfg is not None else [0,1,2,3]} ---")
+                    print(f"\n--- Entry {i}: LHCP={t_lhcp:.4f}  target={rate_label} Hz  "
+                          f"antennas={ant_cfg if ant_cfg is not None else [0,1,2,3]}  "
+                          f"2nd-filter={filt2} ---")
 
-                res = run_snr_scan_dualpol(
-                    phi=args.phi,
-                    theta=args.theta,
-                    psi=args.psi,
-                    threshold_lhcp=t_lhcp,
-                    threshold_rhcp=t_rhcp,
-                    coincidence_window=coinc_window_json,
-                    snr_grid=snr_grid,
-                    n_trials=args.trials,
-                    window=args.window,
-                    step=args.step,
-                    save_filename=save_tag,
-                    antennas=ant_cfg,
-                )
-                if rate_label is not None:
-                    res['target_global_rate_hz'] = rate_label
-                all_results.append(res)
+                    res = run_snr_scan_dualpol(
+                        phi=args.phi,
+                        theta=args.theta,
+                        psi=args.psi,
+                        threshold_lhcp=t_lhcp,
+                        threshold_rhcp=t_rhcp,
+                        coincidence_window=coinc_window_json,
+                        snr_grid=snr_grid,
+                        n_trials=args.trials,
+                        window=args.window,
+                        step=args.step,
+                        save_filename=save_tag,
+                        antennas=ant_cfg,
+                        apply_second_filter=filt2,
+                    )
+                    if rate_label is not None:
+                        res['target_global_rate_hz'] = rate_label
+                    all_results.append(res)
 
         if not args.no_plot:
             if len(all_results) == 1:
@@ -604,25 +654,28 @@ if __name__ == '__main__':
 
         all_results = []
         for ant_cfg in ant_configs:
-            n = len(ant_cfg) if ant_cfg is not None else 4
-            ant_tag = f"_ant{n}" if args.ant_scan else ''
-            save_tag = f"{args.save}{ant_tag}"
+            for filt2 in filter_configs:
+                n = len(ant_cfg) if ant_cfg is not None else 4
+                ant_tag  = f"_ant{n}"             if args.ant_scan    else ''
+                filt_tag = f"_filt{'2' if filt2 else '1'}" if args.filter_scan else ''
+                save_tag = f"{args.save}{ant_tag}{filt_tag}"
 
-            res = run_snr_scan_dualpol(
-                phi=args.phi,
-                theta=args.theta,
-                psi=args.psi,
-                threshold_lhcp=args.threshold_lhcp,
-                threshold_rhcp=args.threshold_rhcp,
-                coincidence_window=args.coincidence_window,
-                snr_grid=snr_grid,
-                n_trials=args.trials,
-                window=args.window,
-                step=args.step,
-                save_filename=save_tag,
-                antennas=ant_cfg,
-            )
-            all_results.append(res)
+                res = run_snr_scan_dualpol(
+                    phi=args.phi,
+                    theta=args.theta,
+                    psi=args.psi,
+                    threshold_lhcp=args.threshold_lhcp,
+                    threshold_rhcp=args.threshold_rhcp,
+                    coincidence_window=args.coincidence_window,
+                    snr_grid=snr_grid,
+                    n_trials=args.trials,
+                    window=args.window,
+                    step=args.step,
+                    save_filename=save_tag,
+                    antennas=ant_cfg,
+                    apply_second_filter=filt2,
+                )
+                all_results.append(res)
 
         if not args.no_plot:
             if len(all_results) == 1:

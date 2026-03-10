@@ -68,13 +68,15 @@ def coherentSum(waveforms, timebase, delays, downsample=False, channel_mask=None
 def coherentSum_dualpol(waveforms_h, waveforms_v, timebase, delays,
                         downsample=True, channel_mask=None, output='circular',
                         apply_filter=True, digitize_first=True,
+                        apply_second_filter=False, fc_second=750e6,
                         return_intermediates=False):
     '''
     Coherent sum for dual polarization with circular basis conversion.
 
     Hardware signal chain:
     1. Downsample/digitize to 4 GHz ADC rate (if downsample=True)
-    2. Apply Shannon-Whitaker digital lowpass filter (if apply_filter=True)
+    2. Apply Shannon-Whitaker digital lowpass filter at 1.5 GHz (if apply_filter=True)
+    2b. Optional second lowpass filter at fc_second (if apply_second_filter=True)
     3. Apply geometric delays and coherent sum each polarization
     4. FFT to frequency domain for circular polarization conversion
     5. Apply π/2 phase shift to V-pol (multiply by j)
@@ -88,8 +90,10 @@ def coherentSum_dualpol(waveforms_h, waveforms_v, timebase, delays,
         delays: (n_antennas,) delay array (ns) - same for both pols
         downsample: if True, decimate to RITC sampling rate (4 GHz)
         channel_mask: optional boolean mask for which antennas to include
-        apply_filter: if True, apply Shannon-Whitaker FIR filter
+        apply_filter: if True, apply first Shannon-Whitaker FIR filter (1.5 GHz)
         digitize_first: if True (default), decimate before filtering (hardware order)
+        apply_second_filter: if True, apply second lowpass FIR filter at fc_second
+        fc_second: cutoff frequency (Hz) for the second filter (default: 750 MHz)
         output: 'separate' | 'circular'
             'separate': return (coh_h, coh_v, timebase)
             'circular': return (lhcp, rhcp, timebase)
@@ -99,7 +103,9 @@ def coherentSum_dualpol(waveforms_h, waveforms_v, timebase, delays,
         - 'separate': (coh_h, coh_v, timebase)
         - 'circular': (lhcp, rhcp, timebase)
     Returns (with return_intermediates=True):
-        same as above but with an extra intermediates dict appended
+        same as above but with an extra intermediates dict appended;
+        intermediates always contains 'coh_h_first_filtered'/'coh_v_first_filtered'
+        (after filter 1) and 'coh_h_filtered'/'coh_v_filtered' (after final filter).
     '''
 
     # HARDWARE ORDER: Digitize → Filter → Sum → Circular
@@ -117,32 +123,46 @@ def coherentSum_dualpol(waveforms_h, waveforms_v, timebase, delays,
         waveforms_h_dig = waveforms_h
         waveforms_v_dig = waveforms_v
 
-    # Step 2: Apply digital lowpass filter
+    # Step 2: Apply first digital lowpass filter (1.5 GHz Shannon-Whitaker)
     if apply_filter:
-        waveforms_h_filt = filters.apply_Shannon_Whitaker_filter(waveforms_h_dig)
-        waveforms_v_filt = filters.apply_Shannon_Whitaker_filter(waveforms_v_dig)
+        waveforms_h_filt1 = filters.apply_Shannon_Whitaker_filter(waveforms_h_dig)
+        waveforms_v_filt1 = filters.apply_Shannon_Whitaker_filter(waveforms_v_dig)
     else:
-        waveforms_h_filt = waveforms_h_dig
-        waveforms_v_filt = waveforms_v_dig
+        waveforms_h_filt1 = waveforms_h_dig
+        waveforms_v_filt1 = waveforms_v_dig
 
-    # Step 3: Coherent sum each polarization (real signals)
-    coh_h, tb = coherentSum(waveforms_h_filt, timebase, delays, downsample=False, channel_mask=channel_mask)
-    coh_v, _  = coherentSum(waveforms_v_filt, timebase, delays, downsample=False, channel_mask=channel_mask)
+    # Step 2b: Optional second digital lowpass filter (default 750 MHz)
+    if apply_second_filter:
+        waveforms_h_filt2 = filters.apply_Shannon_Whitaker_filter(waveforms_h_filt1, fc=fc_second)
+        waveforms_v_filt2 = filters.apply_Shannon_Whitaker_filter(waveforms_v_filt1, fc=fc_second)
+    else:
+        waveforms_h_filt2 = waveforms_h_filt1
+        waveforms_v_filt2 = waveforms_v_filt1
 
-    # Capture post-digitize / post-filter sums for diagnostics
-    coh_h_digitized, _ = coherentSum(waveforms_h_dig, timebase, delays, downsample=False, channel_mask=channel_mask)
-    coh_v_digitized, _ = coherentSum(waveforms_v_dig, timebase, delays, downsample=False, channel_mask=channel_mask)
+    # Step 3: Coherent sum each polarization using final filtered waveforms
+    coh_h, tb = coherentSum(waveforms_h_filt2, timebase, delays, downsample=False, channel_mask=channel_mask)
+    coh_v, _  = coherentSum(waveforms_v_filt2, timebase, delays, downsample=False, channel_mask=channel_mask)
+
+    # Capture post-digitize and per-filter sums for diagnostics
+    coh_h_digitized, _ = coherentSum(waveforms_h_dig,   timebase, delays, downsample=False, channel_mask=channel_mask)
+    coh_v_digitized, _ = coherentSum(waveforms_v_dig,   timebase, delays, downsample=False, channel_mask=channel_mask)
+    coh_h_first_filt,_ = coherentSum(waveforms_h_filt1, timebase, delays, downsample=False, channel_mask=channel_mask)
+    coh_v_first_filt,_ = coherentSum(waveforms_v_filt1, timebase, delays, downsample=False, channel_mask=channel_mask)
 
     if output == 'separate':
         result = (coh_h, coh_v, tb)
         if return_intermediates:
             inter = {
-                'coh_h_digitized': coh_h_digitized,
-                'coh_v_digitized': coh_v_digitized,
-                'coh_h_filtered':  coh_h,
-                'coh_v_filtered':  coh_v,
-                'decimate_factor': decimate_factor,
-                'fs_adc':          fs_adc,
+                'coh_h_digitized':      coh_h_digitized,
+                'coh_v_digitized':      coh_v_digitized,
+                'coh_h_first_filtered': coh_h_first_filt,
+                'coh_v_first_filtered': coh_v_first_filt,
+                'coh_h_filtered':       coh_h,   # final (may equal first if no second filter)
+                'coh_v_filtered':       coh_v,
+                'apply_second_filter':  apply_second_filter,
+                'fc_second':            fc_second,
+                'decimate_factor':      decimate_factor,
+                'fs_adc':               fs_adc,
             }
             return result + (inter,)
         return result
@@ -167,18 +187,22 @@ def coherentSum_dualpol(waveforms_h, waveforms_v, timebase, delays,
         result = (lhcp, rhcp, tb)
         if return_intermediates:
             inter = {
-                'coh_h_digitized': coh_h_digitized,
-                'coh_v_digitized': coh_v_digitized,
-                'coh_h_filtered':  coh_h,
-                'coh_v_filtered':  coh_v,
-                'H_fft':           H_fft,
-                'V_fft':           V_fft,
-                'V_shifted':       V_shifted,
-                'LHCP_fft':        LHCP_fft,
-                'RHCP_fft':        RHCP_fft,
-                'freqs':           freqs,
-                'decimate_factor': decimate_factor,
-                'fs_adc':          fs_adc,
+                'coh_h_digitized':      coh_h_digitized,
+                'coh_v_digitized':      coh_v_digitized,
+                'coh_h_first_filtered': coh_h_first_filt,
+                'coh_v_first_filtered': coh_v_first_filt,
+                'coh_h_filtered':       coh_h,   # final (may equal first if no second filter)
+                'coh_v_filtered':       coh_v,
+                'H_fft':                H_fft,
+                'V_fft':                V_fft,
+                'V_shifted':            V_shifted,
+                'LHCP_fft':             LHCP_fft,
+                'RHCP_fft':             RHCP_fft,
+                'freqs':                freqs,
+                'apply_second_filter':  apply_second_filter,
+                'fc_second':            fc_second,
+                'decimate_factor':      decimate_factor,
+                'fs_adc':               fs_adc,
             }
             return result + (inter,)
         return result

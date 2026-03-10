@@ -7,6 +7,18 @@ from scipy.signal import lfilter, butter, cheby1
 import matplotlib.pyplot as plt
 import coherent_sum
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FILTER CONFIGURATION TOGGLE
+#   APPLY_SECOND_FILTER : bool
+#       True  → apply a second lowpass FIR at FC_SECOND_FILTER after the
+#               primary 1.5 GHz Shannon-Whitaker filter.
+#       False → use only the primary 1.5 GHz filter (legacy behaviour).
+#   FC_SECOND_FILTER : float (Hz)
+#       Cutoff frequency for the second filter.  Per Filter_plan.md: 750 MHz.
+# ─────────────────────────────────────────────────────────────────────────────
+APPLY_SECOND_FILTER = True
+FC_SECOND_FILTER    = 750e6   # Hz
+
 def loadImpulse(filename='impulse/corals_impulse_sci.txt'):
 
     dat=numpy.loadtxt(filename)
@@ -408,7 +420,14 @@ if __name__ =='__main__':
     parser.add_argument('--plots', type=str, default='all', 
                        help='Comma-separated plot rows to show (1-6) or "all". E.g., "1,3,5" or "4,5,6"')
     parser.add_argument('--no-save', action='store_true', help='Do not save plot to file')
+    parser.add_argument('--second-filter', dest='second_filter', action='store_true', default=None,
+                       help='Enable second 750 MHz lowpass filter (overrides module APPLY_SECOND_FILTER)')
+    parser.add_argument('--no-second-filter', dest='second_filter', action='store_false',
+                       help='Disable second filter (overrides module APPLY_SECOND_FILTER)')
     args = parser.parse_args()
+
+    # Resolve toggle: CLI flag beats module constant
+    apply_second_filter = APPLY_SECOND_FILTER if args.second_filter is None else args.second_filter
     
     # Parse plot selection
     if args.plots == 'all':
@@ -427,6 +446,7 @@ if __name__ =='__main__':
     print(f"Sky direction: phi={phi}°, theta={el}°")
     print(f"Polarization: psi={psi}° (0=H-pol, 90=V-pol)")
     print(f"Showing plots: rows {show_rows}")
+    print(f"Second filter (750 MHz): {'ENABLED' if apply_second_filter else 'DISABLED'}")
     print("="*70 + "\n")
     
     # ========== STEP 1: RAW IMPULSE ==========
@@ -479,14 +499,17 @@ if __name__ =='__main__':
     lhcp, rhcp, tb_digitized, inter = csum.coherentSum_dualpol(
         waveforms[:4], waveforms[4:], timebase, delays_q,
         downsample=True, channel_mask=[1,1,1,1], output='circular',
-        apply_filter=True, return_intermediates=True
+        apply_filter=True, apply_second_filter=apply_second_filter,
+        fc_second=FC_SECOND_FILTER, return_intermediates=True
     )
     
     # Extract intermediate values for visualization
-    coh_h_digitized = inter['coh_h_digitized']
-    coh_v_digitized = inter['coh_v_digitized']
-    coh_h_filtered = inter['coh_h_filtered']
-    coh_v_filtered = inter['coh_v_filtered']
+    coh_h_digitized     = inter['coh_h_digitized']
+    coh_v_digitized     = inter['coh_v_digitized']
+    coh_h_first_filtered = inter['coh_h_first_filtered']
+    coh_v_first_filtered = inter['coh_v_first_filtered']
+    coh_h_filtered      = inter['coh_h_filtered']   # final (= first if no second filter)
+    coh_v_filtered      = inter['coh_v_filtered']
     H_fft = inter['H_fft']
     V_fft = inter['V_fft']
     V_shifted = inter['V_shifted']
@@ -497,16 +520,19 @@ if __name__ =='__main__':
     fs_adc = inter['fs_adc']
     dt_adc = (tb_digitized[1] - tb_digitized[0]) * 1e-9  # ns to s
     
-    # Compute unfiltered FFTs for comparison
-    H_fft_unfilt = numpy.fft.rfft(coh_h_digitized)
-    V_fft_unfilt = numpy.fft.rfft(coh_v_digitized)
-    
     # Get filter coefficients for visualization
     filter_coeffs = filters.get_Shannon_Whitaker_coeffs(fs=4e9)
     nfft_filter = 4096
     filter_fft_plot = numpy.fft.rfft(filter_coeffs, n=nfft_filter)
     freqs_filter = numpy.fft.rfftfreq(nfft_filter, d=dt_adc)
     filter_response_db = 20*numpy.log10(numpy.abs(filter_fft_plot) / numpy.max(numpy.abs(filter_fft_plot)))
+
+    # Second filter response (750 MHz)
+    filter2_coeffs = filters.get_Shannon_Whitaker_coeffs(fs=4e9, fc=FC_SECOND_FILTER)
+    filter2_fft_plot = numpy.fft.rfft(filter2_coeffs, n=nfft_filter)
+    filter2_response_db = 20*numpy.log10(numpy.abs(filter2_fft_plot) / numpy.max(numpy.abs(filter2_fft_plot)))
+    # Combined (cascaded) response
+    filter_combined_db = filter_response_db + filter2_response_db
     
     # Compute power spectra
     power_lhcp_freq = numpy.abs(LHCP_fft)**2
@@ -595,38 +621,34 @@ if __name__ =='__main__':
                  bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.5))
         
         ax7 = fig.add_subplot(gs[r, 1])
-        # Show filter response
-        ax7.plot(freqs_filter/1e9, filter_response_db, 'k-', linewidth=2)
+        ax7.plot(freqs_filter/1e9, filter_response_db, 'b-', linewidth=2, label='Filter 1 (1.5 GHz)')
+        if apply_second_filter:
+            ax7.plot(freqs_filter/1e9, filter2_response_db, 'g-', linewidth=2, label=f'Filter 2 ({FC_SECOND_FILTER/1e9:.2f} GHz)')
+            ax7.plot(freqs_filter/1e9, filter_combined_db, 'k--', linewidth=2, label='Cascaded')
         ax7.axhline(-3, color='red', linestyle='--', alpha=0.7, label='-3 dB')
         ax7.set_title('5a. Filter Frequency Response', fontweight='bold')
         ax7.set_xlabel('Frequency [GHz]')
         ax7.set_ylabel('Gain [dB]')
         ax7.set_xlim([0, 2])
         ax7.set_ylim([-60, 5])
-        ax7.legend()
+        ax7.legend(fontsize=7)
         ax7.grid(True, alpha=0.3)
-        ax7.text(0.5, 0.8, f'Cutoff: ~1.1 GHz', 
-                 transform=ax7.transAxes, ha='center', fontsize=9,
-                 bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
         
         ax8 = fig.add_subplot(gs[r, 2])
-        # Normalize filtered and unfiltered to same reference to see attenuation
-        H_max_ref = numpy.max(numpy.abs(H_fft_unfilt))
-        V_max_ref = max(numpy.max(numpy.abs(V_fft_unfilt)), 1e-20)  # Avoid division by zero
-        
-        # Plot unfiltered (faded) and filtered on same scale
-        H_unfilt_db = 20*numpy.log10((numpy.abs(H_fft_unfilt) + 1e-20)/H_max_ref)
-        H_filt_db = 20*numpy.log10((numpy.abs(H_fft) + 1e-20)/H_max_ref)
-        V_unfilt_db = 20*numpy.log10((numpy.abs(V_fft_unfilt) + 1e-20)/V_max_ref)
-        V_filt_db = 20*numpy.log10((numpy.abs(V_fft) + 1e-20)/V_max_ref)
-        
-        ax8.plot(freqs/1e9, H_unfilt_db, 'b:', linewidth=1, label='H unfiltered', alpha=0.4)
-        ax8.plot(freqs/1e9, H_filt_db, 'b-', linewidth=2, label='H filtered', alpha=0.9)
-        ax8.plot(freqs/1e9, V_unfilt_db, 'r:', linewidth=1, label='V unfiltered', alpha=0.4)
-        ax8.plot(freqs/1e9, V_filt_db, 'r-', linewidth=2, label='V filtered', alpha=0.9)
-        # Overlay filter response (scaled to fit on same axes)
-        ax8.plot(freqs_filter/1e9, filter_response_db, 'k--', linewidth=1.5, label='Filter', alpha=0.7)
-        ax8.set_title('5b. FFT: Before/After Filtering', fontweight='bold')
+        H_max_ref = numpy.max(numpy.abs(numpy.fft.rfft(coh_h_digitized))) + 1e-20
+
+        H_unfilt_db      = 20*numpy.log10((numpy.abs(numpy.fft.rfft(coh_h_digitized)) + 1e-20)/H_max_ref)
+        H_filt1_db       = 20*numpy.log10((numpy.abs(numpy.fft.rfft(coh_h_first_filtered)) + 1e-20)/H_max_ref)
+        H_filt_final_db  = 20*numpy.log10((numpy.abs(H_fft) + 1e-20)/H_max_ref)
+
+        ax8.plot(freqs/1e9, H_unfilt_db,     'b:', linewidth=1,   label='H raw',         alpha=0.4)
+        ax8.plot(freqs/1e9, H_filt1_db,      'b-', linewidth=1.5, label='H filt1 (1.5G)', alpha=0.8)
+        if apply_second_filter:
+            ax8.plot(freqs/1e9, H_filt_final_db, 'b-', linewidth=2.5, label='H filt2 (0.75G)', alpha=1.0)
+        ax8.plot(freqs_filter/1e9, filter_response_db, 'gray', linewidth=1, linestyle='--', label='Filter 1', alpha=0.6)
+        if apply_second_filter:
+            ax8.plot(freqs_filter/1e9, filter_combined_db, 'k--', linewidth=1.5, label='Cascaded', alpha=0.7)
+        ax8.set_title('5b. H-pol FFT: Filter Stages', fontweight='bold')
         ax8.set_xlabel('Frequency [GHz]')
         ax8.set_ylabel('Magnitude [dB]')
         ax8.set_xlim([0, 2])
@@ -635,16 +657,18 @@ if __name__ =='__main__':
         ax8.grid(True, alpha=0.3)
         
         ax6 = fig.add_subplot(gs[r, 3])
-        ax6.plot(tb_digitized, coh_h_filtered, 'b-', linewidth=1.5, label='H filtered')
-        ax6.plot(tb_digitized, coh_v_filtered, 'r-', linewidth=1.5, label='V filtered')
-        ax6.set_title('6. Filtered (FIR)', fontweight='bold')
+        ax6.plot(tb_digitized, coh_h_first_filtered, 'b-',  linewidth=1.5, label='H filt1 (1.5 GHz)', alpha=0.7)
+        ax6.plot(tb_digitized, coh_v_first_filtered, 'r-',  linewidth=1.5, label='V filt1 (1.5 GHz)', alpha=0.7)
+        if apply_second_filter:
+            ax6.plot(tb_digitized, coh_h_filtered, 'b-', linewidth=2.5, label='H filt2 (0.75 GHz)', alpha=1.0)
+            ax6.plot(tb_digitized, coh_v_filtered, 'r-', linewidth=2.5, label='V filt2 (0.75 GHz)', alpha=1.0)
+            ax6.set_title('6. Once- & Twice-Filtered', fontweight='bold')
+        else:
+            ax6.set_title('6. Filtered (1.5 GHz FIR)', fontweight='bold')
         ax6.set_xlabel('Time [ns]')
         ax6.set_ylabel('Voltage [V]')
-        ax6.legend(fontsize=8)
+        ax6.legend(fontsize=7)
         ax6.grid(True, alpha=0.3)
-        #ax6.text(0.5, 0.5, 'Shannon-Whitaker\n33-tap FIR', 
-        #         transform=ax6.transAxes, ha='center', va='center', fontsize=10,
-        #         bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.5))
     
     # Row 3: FFT spectra for H and V polarizations
     if 3 in show_rows:
@@ -840,4 +864,106 @@ if __name__ =='__main__':
         print(f"Saved comprehensive diagnostic plot to:")
         print(f"  plots/dualpol_processing_chain.png")
         print(f"{'='*70}\n")
+
+    # =========================================================================
+    # AUXILIARY NOISE FIGURE — amplitude before and after filter stages
+    # =========================================================================
+    # Generate a short (4096 sample) white-noise reference at the ADC rate.
+    # Only the first 256 samples are shown in the time-domain panels so the
+    # plot stays readable.  The full 4096-point FFT gives clean spectral view.
+    numpy.random.seed(42)
+    n_noise       = 4096
+    n_noise_show  = 256          # samples shown in time-domain panel
+    noise_raw     = numpy.random.normal(0.0, 1.0, n_noise)
+    t_noise_ns    = numpy.arange(n_noise) * (1.0 / fs_adc) * 1e9  # ns
+
+    noise_filt1   = filters.apply_Shannon_Whitaker_filter(noise_raw)
+    rms_raw       = numpy.sqrt(numpy.mean(noise_raw  **2))
+    rms_filt1     = numpy.sqrt(numpy.mean(noise_filt1**2))
+
+    if apply_second_filter:
+        noise_filt2 = filters.apply_Shannon_Whitaker_filter(noise_filt1, fc=FC_SECOND_FILTER)
+        rms_filt2   = numpy.sqrt(numpy.mean(noise_filt2**2))
+        n_noise_cols = 3
+    else:
+        n_noise_cols = 2
+
+    freqs_noise = numpy.fft.rfftfreq(n_noise, d=1.0/fs_adc) / 1e9  # GHz
+
+    def psd_db(sig):
+        S = numpy.abs(numpy.fft.rfft(sig))**2
+        return 10*numpy.log10(S / numpy.max(S) + 1e-14)
+
+    fig_noise, axes_noise = plt.subplots(2, n_noise_cols, figsize=(5*n_noise_cols, 7))
+    fig_noise.suptitle('Noise Amplitude: Filter Stage Comparison\n'
+                        f'(white noise, {fs_adc/1e9:.1f} GHz ADC, {n_noise} samples, '
+                        f'showing first {n_noise_show} in time domain)',
+                        fontsize=13, fontweight='bold')
+
+    # ── Row 0: time-domain waveforms (short window) ──────────────────────────
+    slice_t = slice(0, n_noise_show)
+    t_short  = t_noise_ns[slice_t]
+
+    axes_noise[0, 0].plot(t_short, noise_raw[slice_t], 'k-', linewidth=0.7)
+    axes_noise[0, 0].set_title(f'Raw white noise\nRMS = {rms_raw:.3f}', fontweight='bold')
+    axes_noise[0, 0].set_xlabel('Time [ns]'); axes_noise[0, 0].set_ylabel('Amplitude')
+    axes_noise[0, 0].grid(True, alpha=0.3)
+    axes_noise[0, 0].axhline( rms_raw, color='red',  linestyle='--', linewidth=1, label='+1σ')
+    axes_noise[0, 0].axhline(-rms_raw, color='red',  linestyle='--', linewidth=1, label='-1σ')
+    axes_noise[0, 0].legend(fontsize=8)
+
+    axes_noise[0, 1].plot(t_short, noise_filt1[slice_t], 'b-', linewidth=0.7)
+    axes_noise[0, 1].set_title(f'After Filter 1 (1.5 GHz)\nRMS = {rms_filt1:.3f}  '
+                                f'({100*rms_filt1/rms_raw:.1f}% of raw)', fontweight='bold')
+    axes_noise[0, 1].set_xlabel('Time [ns]'); axes_noise[0, 1].set_ylabel('Amplitude')
+    axes_noise[0, 1].grid(True, alpha=0.3)
+    axes_noise[0, 1].axhline( rms_filt1, color='red', linestyle='--', linewidth=1)
+    axes_noise[0, 1].axhline(-rms_filt1, color='red', linestyle='--', linewidth=1)
+
+    if apply_second_filter:
+        axes_noise[0, 2].plot(t_short, noise_filt2[slice_t], 'g-', linewidth=0.7)
+        axes_noise[0, 2].set_title(f'After Filter 2 ({FC_SECOND_FILTER/1e9:.3f} GHz)\n'
+                                    f'RMS = {rms_filt2:.3f}  ({100*rms_filt2/rms_raw:.1f}% of raw)',
+                                    fontweight='bold')
+        axes_noise[0, 2].set_xlabel('Time [ns]'); axes_noise[0, 2].set_ylabel('Amplitude')
+        axes_noise[0, 2].grid(True, alpha=0.3)
+        axes_noise[0, 2].axhline( rms_filt2, color='red', linestyle='--', linewidth=1)
+        axes_noise[0, 2].axhline(-rms_filt2, color='red', linestyle='--', linewidth=1)
+
+    # ── Row 1: power spectral density ────────────────────────────────────────
+    axes_noise[1, 0].plot(freqs_noise, psd_db(noise_raw), 'k-', linewidth=0.8)
+    axes_noise[1, 0].set_title('PSD — Raw', fontweight='bold')
+    axes_noise[1, 0].set_xlabel('Frequency [GHz]'); axes_noise[1, 0].set_ylabel('Power [dB, norm.]')
+    axes_noise[1, 0].set_xlim([0, 2]); axes_noise[1, 0].set_ylim([-40, 5])
+    axes_noise[1, 0].grid(True, alpha=0.3)
+
+    axes_noise[1, 1].plot(freqs_noise, psd_db(noise_filt1), 'b-', linewidth=0.8)
+    axes_noise[1, 1].plot(freqs_filter/1e9, filter_response_db, 'r--', linewidth=1.5,
+                           label='Filter 1 resp.', alpha=0.7)
+    axes_noise[1, 1].set_title('PSD — After Filter 1', fontweight='bold')
+    axes_noise[1, 1].set_xlabel('Frequency [GHz]'); axes_noise[1, 1].set_ylabel('Power [dB, norm.]')
+    axes_noise[1, 1].set_xlim([0, 2]); axes_noise[1, 1].set_ylim([-40, 5])
+    axes_noise[1, 1].legend(fontsize=8); axes_noise[1, 1].grid(True, alpha=0.3)
+
+    if apply_second_filter:
+        axes_noise[1, 2].plot(freqs_noise, psd_db(noise_filt2), 'g-', linewidth=0.8)
+        axes_noise[1, 2].plot(freqs_filter/1e9, filter_combined_db, 'r--', linewidth=1.5,
+                               label='Cascaded resp.', alpha=0.7)
+        axes_noise[1, 2].set_title('PSD — After Filter 2', fontweight='bold')
+        axes_noise[1, 2].set_xlabel('Frequency [GHz]'); axes_noise[1, 2].set_ylabel('Power [dB, norm.]')
+        axes_noise[1, 2].set_xlim([0, 2]); axes_noise[1, 2].set_ylim([-40, 5])
+        axes_noise[1, 2].legend(fontsize=8); axes_noise[1, 2].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    if not args.no_save:
+        plt.savefig('plots/noise_filter_comparison.png', dpi=150, bbox_inches='tight')
+        print(f"Saved noise comparison plot to: plots/noise_filter_comparison.png")
+
+    # Print RMS reduction summary
+    print(f"\nNoise RMS (white input, {fs_adc/1e9:.1f} GHz):")
+    print(f"  Raw         : {rms_raw:.4f}  (100%)")
+    print(f"  After filt1 : {rms_filt1:.4f}  ({100*rms_filt1/rms_raw:.1f}%)")
+    if apply_second_filter:
+        print(f"  After filt2 : {rms_filt2:.4f}  ({100*rms_filt2/rms_raw:.1f}%)")
+
     plt.show()
