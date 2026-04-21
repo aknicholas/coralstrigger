@@ -24,7 +24,21 @@ import sys
 import os
 import snr_scan_dualpol as snr_scan
 
-def optimize_windows(phi, theta, psi, threshold, coincidence_window,
+
+def _interpolate_snr50(snr, eff):
+    """Return SNR at 50% coincidence efficiency by linear interpolation, or NaN."""
+    idx = np.where(eff >= 0.5)[0]
+    if len(idx) > 0:
+        k = idx[0]
+        if k > 0:
+            x0, x1 = snr[k - 1], snr[k]
+            y0, y1 = eff[k - 1], eff[k]
+            return x0 + (0.5 - y0) * (x1 - x0) / (y1 - y0) if y1 != y0 else x1
+        return snr[0]
+    return np.nan
+
+
+def optimize_windows(phi, theta, psi, thresholds_per_window, coincidence_window,
                      snr_grid, n_trials, window_grid, step, save_filename=None,
                      antennas=None):
     """
@@ -38,9 +52,12 @@ def optimize_windows(phi, theta, psi, threshold, coincidence_window,
     -----------
     phi, theta, psi : float
         Signal arrival angles (deg)
-    threshold : float
-        Normalized power threshold applied to both LHCP and RHCP channels
-        (per-antenna power after beamforming / n_ant)
+    thresholds_per_window : dict or float
+        Per-window thresholds: dict mapping window (samples, int) → threshold
+        float, or a single float used for all windows. Using a per-window dict
+        (one threshold JSON per window size) is strongly preferred — a fixed
+        threshold makes smaller windows look artificially better because the
+        noise tail statistics change with window size.
     coincidence_window : float
         Coincidence time window (ns)
     snr_grid : array
@@ -60,28 +77,302 @@ def optimize_windows(phi, theta, psi, threshold, coincidence_window,
     Returns:
     --------
     dict with keys: windows, windows_ns, snr50, phi, theta, psi,
-                    threshold, step, snr_grid, n_trials, coincidence_window
+                    thresholds_per_window, step, snr_grid, n_trials,
+                    coincidence_window
     """
 
     win_min, win_max, win_step = window_grid
     windows = np.arange(win_min, win_max + 1, win_step, dtype=int)
 
+    # Drop windows smaller than the stride — those leave gaps between frames.
+    invalid = windows < step
+    if invalid.any():
+        print(f"WARNING: skipping {invalid.sum()} window value(s) smaller than "
+              f"stride ({step} samples): {windows[invalid].tolist()}")
+        windows = windows[~invalid]
+    if len(windows) == 0:
+        raise ValueError(
+            f"No valid window sizes remain after removing values < step ({step}). "
+            f"Increase --window-min or decrease --step.")
+
     # ns per ADC sample
-    sample_ns = geometry.ritc_sample_step 
+    sample_ns = geometry.ritc_sample_step
 
     print(f"\n=== Window Optimization ===")
     print(f"Direction: phi={phi:.1f}°, theta={theta:.1f}°, psi={psi:.1f}°")
-    print(f"Threshold: {threshold:.4f}  |  Coincidence window: {coincidence_window:.1f} ns")
-    print(f"Window range: {win_min}–{win_max} samples "
-          f"({win_min*sample_ns:.1f}–{win_max*sample_ns:.1f} ns), "
-          f"step {win_step} samples ({win_step*sample_ns:.1f} ns)")
-    print(f"Power-sum step: {step} samples  |  SNR points: {len(snr_grid)}  |  Trials: {n_trials}")
+    if isinstance(thresholds_per_window, dict):
+        print(f"Thresholds: per-window (calibrated)  |  Coincidence window: {coincidence_window:.1f} ns")
+    else:
+        print(f"Threshold: {float(thresholds_per_window):.4f}  |  Coincidence window: {coincidence_window:.1f} ns")
+    print(f"Window range: {windows[0]}–{windows[-1]} samples "
+          f"({windows[0]*sample_ns:.1f}–{windows[-1]*sample_ns:.1f} ns)  "
+          f"[stride fixed at {step} samples = {step*sample_ns:.1f} ns]")
+    print(f"SNR points: {len(snr_grid)}  |  Trials: {n_trials}")
 
     snr50_list = []
 
     for window in windows:
         window_ns = window * sample_ns
-        print(f"\n--- Window = {window} samples ({window_ns:.1f} ns) ---")
+        if isinstance(thresholds_per_window, dict):
+            thr = thresholds_per_window.get(
+                int(window),
+                next(iter(thresholds_per_window.values()))
+            )
+        else:
+            thr = float(thresholds_per_window)
+        print(f"\n--- Window = {window} samples ({window_ns:.1f} ns), threshold={thr:.4f} ---")
+
+        res = snr_scan.run_snr_scan_dualpol(
+            phi=phi,
+            theta=theta,
+            psi=psi,
+            threshold_lhcp=thr,
+            threshold_rhcp=thr,
+            coincidence_window=coincidence_window,
+            snr_grid=snr_grid,
+            n_trials=n_trials,
+            window=window,
+            step=step,
+            save_filename=None,
+            antennas=antennas,
+        )
+
+        # Interpolate SNR at 50% coincidence efficiency
+        snr_50 = _interpolate_snr50(res['snr'], res['eff_coinc'])
+
+        snr50_list.append(snr_50)
+        print(f"  → SNR50 = {snr_50:.3f}")
+
+    windows_ns = windows * sample_ns
+
+    opt_results = {
+        'windows':              windows,
+        'windows_ns':           windows_ns,
+        'snr50':                np.array(snr50_list),
+        'phi':                  phi,
+        'theta':                theta,
+        'psi':                  psi,
+        'thresholds_per_window': thresholds_per_window,
+        'step':                 step,
+        'snr_grid':             snr_grid,
+        'n_trials':             n_trials,
+        'coincidence_window':   coincidence_window,
+        'antennas':             antennas,
+    }
+
+    if save_filename:
+        os.makedirs('plots', exist_ok=True)
+        np.save(f'plots/{save_filename}.npy', opt_results)
+
+        thr_note = ('per-window' if isinstance(thresholds_per_window, dict)
+                    else f'{float(thresholds_per_window):.3f}')
+        data = np.column_stack([windows, windows_ns, snr50_list])
+        header = (
+            f"Window optimization at (phi={phi:.1f}, theta={theta:.1f}, psi={psi:.1f})\n"
+            f"Threshold={thr_note}, Power-step={step}, "
+            f"Coinc={coincidence_window:.1f} ns, Trials={n_trials}\n"
+            "Window(samples)\tWindow(ns)\tSNR50"
+        )
+        np.savetxt(f'plots/{save_filename}.txt', data, fmt='%.6g', header=header)
+        print(f"\nSaved: plots/{save_filename}.npy and .txt")
+
+    return opt_results
+
+
+def optimize_filter_freq(phi, theta, psi, fc_hz_list, thresholds_per_fc,
+                         coincidence_window, snr_grid, n_trials,
+                         window, step, save_filename=None, antennas=None):
+    """
+    Scan over filter cutoff frequencies and find SNR at 50% coincidence efficiency.
+
+    The first entry in fc_hz_list is treated as the baseline (no second filter —
+    only the always-on Shannon-Whitaker 1.5 GHz front-end filter is applied).
+    Every subsequent entry applies a second lowpass FIR at that cutoff frequency
+    after beamforming, lowering the noise floor and potentially improving sensitivity.
+
+    Parameters
+    ----------
+    phi, theta, psi : float
+        Signal arrival angles (deg).
+    fc_hz_list : list of float
+        Cutoff frequencies in Hz to scan, e.g. [1.5e9, 1.25e9, 1.0e9, 750e6].
+        The first value is the no-second-filter baseline.
+    thresholds_per_fc : dict or float
+        Mapping {fc_hz: threshold} for LHCP and RHCP (assumed symmetric).
+        Pass a single float to use the same threshold for all frequencies.
+        Thresholds should be calibrated at each (fc, window, step) combination
+        via generate_threshold_curves_dualpol.py.
+    coincidence_window : float
+        Coincidence time window (ns).
+    snr_grid : array
+        Per-antenna SNR values to test.
+    n_trials : int
+        Trials per SNR point.
+    window, step : int
+        Power-sum window and stride (samples).
+    save_filename : str or None
+        Base filename; saves plots/<save_filename>_filter_opt.npy/.txt.
+    antennas : list of int or None
+        Physical antenna indices (default: all four).
+
+    Returns
+    -------
+    dict with keys:
+        fc_hz, fc_mhz, snr50, noise_rms_f1, noise_rms_f2,
+        phi, theta, psi, window, step, coincidence_window, n_trials
+    """
+    sample_ns = geometry.ritc_sample_step
+    ref_fc = fc_hz_list[0]
+
+    print(f"\n=== Filter Frequency Optimization ===")
+    print(f"Direction: phi={phi:.1f}°, theta={theta:.1f}°, psi={psi:.1f}°")
+    print(f"Window: {window} samples ({window*sample_ns:.1f} ns)  |  "
+          f"Step: {step} samples ({step*sample_ns:.1f} ns)")
+    print(f"FC values: {[f/1e6 for f in fc_hz_list]} MHz")
+
+    snr50_list     = []
+    noise_rms_f1_list = []
+    noise_rms_f2_list = []
+
+    for i, fc in enumerate(fc_hz_list):
+        fc_mhz = fc / 1e6
+        apply_second = (fc != ref_fc)
+        fc_second_arg = fc if apply_second else None
+
+        if isinstance(thresholds_per_fc, dict):
+            thr = thresholds_per_fc.get(fc, thresholds_per_fc[ref_fc])
+        else:
+            thr = float(thresholds_per_fc)
+
+        print(f"\n--- fc = {fc_mhz:.0f} MHz  (second filter: {'ON' if apply_second else 'OFF'})  "
+              f"threshold = {thr:.4f} ---")
+
+        res = snr_scan.run_snr_scan_dualpol(
+            phi=phi,
+            theta=theta,
+            psi=psi,
+            threshold_lhcp=thr,
+            threshold_rhcp=thr,
+            coincidence_window=coincidence_window,
+            snr_grid=snr_grid,
+            n_trials=n_trials,
+            window=window,
+            step=step,
+            save_filename=None,
+            antennas=antennas,
+            apply_second_filter=apply_second,
+            fc_second=fc_second_arg,
+        )
+
+        snr_50 = _interpolate_snr50(res['snr'], res['eff_coinc'])
+        snr50_list.append(snr_50)
+        noise_rms_f1_list.append(res.get('noise_rms_f1'))
+        noise_rms_f2_list.append(res.get('noise_rms_f2'))
+        print(f"  → SNR50 = {snr_50:.3f}")
+
+    fc_hz_arr  = np.array(fc_hz_list)
+    fc_mhz_arr = fc_hz_arr / 1e6
+
+    opt_results = {
+        'fc_hz':              fc_hz_arr,
+        'fc_mhz':             fc_mhz_arr,
+        'snr50':              np.array(snr50_list),
+        'noise_rms_f1':       np.array(noise_rms_f1_list, dtype=object),
+        'noise_rms_f2':       np.array(noise_rms_f2_list, dtype=object),
+        'phi':                phi,
+        'theta':              theta,
+        'psi':                psi,
+        'window':             window,
+        'step':               step,
+        'coincidence_window': coincidence_window,
+        'n_trials':           n_trials,
+        'antennas':           antennas,
+    }
+
+    if save_filename:
+        os.makedirs('plots', exist_ok=True)
+        np.save(f'plots/{save_filename}_filter_opt.npy', opt_results)
+        data = np.column_stack([fc_mhz_arr, snr50_list])
+        header = (
+            f"Filter frequency optimization at (phi={phi:.1f}, theta={theta:.1f}, psi={psi:.1f})\n"
+            f"Window={window} samp, Step={step} samp, Coinc={coincidence_window:.1f} ns, "
+            f"Trials={n_trials}\n"
+            "FC(MHz)\tSNR50"
+        )
+        np.savetxt(f'plots/{save_filename}_filter_opt.txt', data, fmt='%.6g', header=header)
+        print(f"\nSaved: plots/{save_filename}_filter_opt.npy and .txt")
+
+    return opt_results
+
+
+def optimize_step(phi, theta, psi, threshold, coincidence_window,
+                  snr_grid, n_trials, window, step_grid,
+                  save_filename=None, antennas=None):
+    """
+    Scan over power-sum stride sizes (step) and find SNR at 50% coincidence efficiency.
+
+    The window size is held fixed while the stride (number of samples between
+    successive power-sum frames) is varied.  A smaller stride increases the
+    number of frames per event and the time resolution of the coincidence check,
+    at the cost of higher computational load.
+
+    Parameters
+    ----------
+    phi, theta, psi : float
+        Signal arrival angles (deg).
+    threshold : float
+        Normalized power threshold (applied to both LHCP and RHCP).
+    coincidence_window : float
+        Coincidence time window (ns).
+    snr_grid : array
+        Per-antenna SNR values to test.
+    n_trials : int
+        Trials per SNR point.
+    window : int
+        Power-sum window size (samples); held fixed.
+    step_grid : tuple
+        (min_samples, max_samples, scan_step) for the stride scan range.
+    save_filename : str or None
+        Base filename; saves plots/<save_filename>_step_opt.npy/.txt.
+    antennas : list of int or None
+        Physical antenna indices (default: all four).
+
+    Returns
+    -------
+    dict with keys:
+        steps, steps_ns, snr50, window, window_ns,
+        phi, theta, psi, threshold, coincidence_window, n_trials
+    """
+    step_min, step_max, step_scan_step = step_grid
+    steps = np.arange(step_min, step_max + 1, step_scan_step, dtype=int)
+    sample_ns = geometry.ritc_sample_step
+    window_ns = window * sample_ns
+
+    # Drop strides larger than the window — those leave gaps between frames.
+    invalid = steps > window
+    if invalid.any():
+        print(f"WARNING: skipping {invalid.sum()} stride value(s) larger than "
+              f"window ({window} samples): {steps[invalid].tolist()}")
+        steps = steps[~invalid]
+    if len(steps) == 0:
+        raise ValueError(
+            f"No valid stride sizes remain after removing values > window ({window}). "
+            f"Decrease --step-max or increase --window.")
+
+    print(f"\n=== Power-Sum Stride Optimization ===")
+    print(f"Direction: phi={phi:.1f}°, theta={theta:.1f}°, psi={psi:.1f}°")
+    print(f"Threshold: {threshold:.4f}  |  Coincidence window: {coincidence_window:.1f} ns")
+    print(f"Window: {window} samples ({window_ns:.1f} ns)  [fixed]")
+    print(f"Stride range: {steps[0]}–{steps[-1]} samples "
+          f"({steps[0]*sample_ns:.1f}–{steps[-1]*sample_ns:.1f} ns)  "
+          f"[window fixed at {window} samples = {window_ns:.1f} ns]")
+    print(f"SNR points: {len(snr_grid)}  |  Trials: {n_trials}")
+
+    snr50_list = []
+
+    for step in steps:
+        step_ns = step * sample_ns
+        print(f"\n--- Stride = {step} samples ({step_ns:.1f} ns) ---")
 
         res = snr_scan.run_snr_scan_dualpol(
             phi=phi,
@@ -98,54 +389,40 @@ def optimize_windows(phi, theta, psi, threshold, coincidence_window,
             antennas=antennas,
         )
 
-        # Interpolate SNR at 50% coincidence efficiency
-        eff = res['eff_coinc']
-        snr = res['snr']
-        idx = np.where(eff >= 0.5)[0]
-        if len(idx) > 0:
-            k = idx[0]
-            if k > 0:
-                x0, x1 = snr[k - 1], snr[k]
-                y0, y1 = eff[k - 1], eff[k]
-                snr_50 = x0 + (0.5 - y0) * (x1 - x0) / (y1 - y0) if y1 != y0 else x1
-            else:
-                snr_50 = snr[0]
-        else:
-            snr_50 = np.nan
-
+        snr_50 = _interpolate_snr50(res['snr'], res['eff_coinc'])
         snr50_list.append(snr_50)
         print(f"  → SNR50 = {snr_50:.3f}")
 
-    windows_ns = windows * sample_ns
+    steps_ns = steps * sample_ns
 
     opt_results = {
-        'windows':            windows,
-        'windows_ns':         windows_ns,
+        'steps':              steps,
+        'steps_ns':           steps_ns,
         'snr50':              np.array(snr50_list),
+        'window':             window,
+        'window_ns':          window_ns,
         'phi':                phi,
         'theta':              theta,
         'psi':                psi,
         'threshold':          threshold,
-        'step':               step,
-        'snr_grid':           snr_grid,
-        'n_trials':           n_trials,
         'coincidence_window': coincidence_window,
+        'n_trials':           n_trials,
+        'snr_grid':           snr_grid,
         'antennas':           antennas,
     }
 
     if save_filename:
         os.makedirs('plots', exist_ok=True)
-        np.save(f'plots/{save_filename}.npy', opt_results)
-
-        data = np.column_stack([windows, windows_ns, snr50_list])
+        np.save(f'plots/{save_filename}_step_opt.npy', opt_results)
+        data = np.column_stack([steps, steps_ns, snr50_list])
         header = (
-            f"Window optimization at (phi={phi:.1f}, theta={theta:.1f}, psi={psi:.1f})\n"
-            f"Threshold={threshold:.3f}, Power-step={step}, "
+            f"Stride optimization at (phi={phi:.1f}, theta={theta:.1f}, psi={psi:.1f})\n"
+            f"Threshold={threshold:.3f}, Window={window} samp ({window_ns:.1f} ns), "
             f"Coinc={coincidence_window:.1f} ns, Trials={n_trials}\n"
-            "Window(samples)\tWindow(ns)\tSNR50"
+            "Stride(samples)\tStride(ns)\tSNR50"
         )
-        np.savetxt(f'plots/{save_filename}.txt', data, fmt='%.6g', header=header)
-        print(f"\nSaved: plots/{save_filename}.npy and .txt")
+        np.savetxt(f'plots/{save_filename}_step_opt.txt', data, fmt='%.6g', header=header)
+        print(f"\nSaved: plots/{save_filename}_step_opt.npy and .txt")
 
     return opt_results
 
@@ -501,6 +778,129 @@ def plot_window_optimization(opt_results, save_filename=None):
     return fig, ax
 
 
+def plot_filter_optimization(opt_results, save_filename=None):
+    """
+    Plot SNR50 vs filter cutoff frequency from an optimize_filter_freq run.
+
+    Parameters
+    ----------
+    opt_results : dict
+        Output of optimize_filter_freq().
+    save_filename : str or None
+        Base filename; saves plots/<save_filename>_filter_opt.png.
+
+    Returns
+    -------
+    (fig, ax)
+    """
+    fc_mhz  = opt_results['fc_mhz']
+    snr50   = opt_results['snr50']
+    phi     = opt_results['phi']
+    theta   = opt_results['theta']
+    psi     = opt_results['psi']
+    window  = opt_results['window']
+    step    = opt_results['step']
+    sample_ns = geometry.ritc_sample_step
+    window_ns = window * sample_ns
+    step_ns   = step   * sample_ns
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    valid = ~np.isnan(snr50)
+    ax.plot(fc_mhz[valid], snr50[valid], 'o-',
+            color='darkorchid', linewidth=2, markersize=7,
+            label='SNR @ 50% efficiency')
+
+    if valid.any():
+        best_idx = int(np.nanargmin(snr50))
+        ax.plot(fc_mhz[best_idx], snr50[best_idx], '*',
+                color='red', markersize=14, zorder=5,
+                label=f'Best: {fc_mhz[best_idx]:.0f} MHz  '
+                      f'(SNR50 = {snr50[best_idx]:.3f})')
+        ax.axvline(fc_mhz[best_idx], color='red', linestyle=':', alpha=0.4, linewidth=1)
+
+    ax.set_xlabel('Filter Cutoff Frequency (MHz)', fontsize=12)
+    ax.set_ylabel('SNR at 50% Coincidence Efficiency', fontsize=12)
+    ax.set_title(
+        f'Filter Frequency Optimization: φ={phi:.1f}°, θ={theta:.1f}°, ψ={psi:.1f}°\n'
+        f'Window = {window} samp ({window_ns:.1f} ns)  |  '
+        f'Step = {step} samp ({step_ns:.1f} ns)',
+        fontsize=12,
+    )
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    if save_filename:
+        os.makedirs('plots', exist_ok=True)
+        out = f'plots/{save_filename}_filter_opt.png'
+        plt.savefig(out, dpi=150)
+        print(f"Saved: {out}")
+
+    plt.show()
+    return fig, ax
+
+
+def plot_step_optimization(opt_results, save_filename=None):
+    """
+    Plot SNR50 vs power-sum stride size from an optimize_step run.
+
+    Parameters
+    ----------
+    opt_results : dict
+        Output of optimize_step().
+    save_filename : str or None
+        Base filename; saves plots/<save_filename>_step_opt.png.
+
+    Returns
+    -------
+    (fig, ax)
+    """
+    steps_ns  = opt_results['steps_ns']
+    snr50     = opt_results['snr50']
+    phi       = opt_results['phi']
+    theta     = opt_results['theta']
+    psi       = opt_results['psi']
+    threshold = opt_results['threshold']
+    window    = opt_results['window']
+    window_ns = opt_results['window_ns']
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    valid = ~np.isnan(snr50)
+    ax.plot(steps_ns[valid], snr50[valid], 's-',
+            color='steelblue', linewidth=2, markersize=7,
+            label='SNR @ 50% efficiency')
+
+    if valid.any():
+        best_idx = int(np.nanargmin(snr50))
+        ax.plot(steps_ns[best_idx], snr50[best_idx], '*',
+                color='red', markersize=14, zorder=5,
+                label=f'Best: {steps_ns[best_idx]:.1f} ns  '
+                      f'(SNR50 = {snr50[best_idx]:.3f})')
+        ax.axvline(steps_ns[best_idx], color='red', linestyle=':', alpha=0.4, linewidth=1)
+
+    ax.set_xlabel('Power-Sum Stride (ns)', fontsize=12)
+    ax.set_ylabel('SNR at 50% Coincidence Efficiency', fontsize=12)
+    ax.set_title(
+        f'Stride Optimization: φ={phi:.1f}°, θ={theta:.1f}°, ψ={psi:.1f}°\n'
+        f'Threshold = {threshold:.3f}  |  Window = {window} samp ({window_ns:.1f} ns)',
+        fontsize=12,
+    )
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    if save_filename:
+        os.makedirs('plots', exist_ok=True)
+        out = f'plots/{save_filename}_step_opt.png'
+        plt.savefig(out, dpi=150)
+        print(f"Saved: {out}")
+
+    plt.show()
+    return fig, ax
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="Optimization scans for CoRaLS trigger parameters",
@@ -508,8 +908,13 @@ if __name__ == '__main__':
     )
 
     # Optimization mode
-    parser.add_argument('--mode', choices=['windows', 'falserate'], default='windows',
-                        help='Which parameter to optimize')
+    parser.add_argument('--mode',
+                        choices=['windows', 'step', 'filter', 'falserate'],
+                        default='windows',
+                        help='Optimization axis: windows=scan window size, '
+                             'step=scan power-sum stride, '
+                             'filter=scan filter cutoff frequency, '
+                             'falserate=false-rate vs threshold curves')
 
     # ---------- Wave direction ----------
     parser.add_argument('--phi',   type=float, default=0.0,
@@ -520,32 +925,70 @@ if __name__ == '__main__':
                         help='Polarization angle (deg; 0=H-pol, 90=V-pol)')
 
     # ---------- Threshold / coincidence ----------
-    parser.add_argument('--threshold', type=float, default=3.12,
-                        help='Normalized power threshold (LHCP and RHCP)')
-    parser.add_argument('--coincidence-window', type=float, default=100.0,
-                        help='Coincidence time window (ns)')
+    parser.add_argument('--threshold', type=float, default=None,
+                        help='Normalized power threshold (LHCP and RHCP). '
+                             'Overridden by the first entry in --threshold-json if provided.')
+    parser.add_argument('--coincidence-window', type=float, default=None,
+                        help='Coincidence time window (ns). '
+                             'Overridden by coincidence_window_ns in --threshold-json if present.')
+
+    # ---------- Threshold / n_beams from JSON ----------
+    parser.add_argument('--threshold-json', type=str, default=None,
+                        help='Path to threshold_analysis_dualpol.json. Reads n_beams, '
+                             'coincidence_window_ns, and the threshold for --threshold-index. '
+                             'CLI --threshold and --coincidence-window take precedence if given.')
+    parser.add_argument('--threshold-index', type=int, default=None,
+                        help='Index into the "thresholds" list in --threshold-json. '
+                             'Omit (or 0) to use the first entry.')
+    parser.add_argument('--n-beams', type=int, default=None,
+                        help='Number of active beams for global rate estimate. '
+                             'Read from --threshold-json if not specified here.')
 
     # ---------- SNR scan grid ----------
     parser.add_argument('--snr-min',  type=float, default=0.2, help='Minimum SNR')
     parser.add_argument('--snr-max',  type=float, default=6.0, help='Maximum SNR')
     parser.add_argument('--snr-step', type=float, default=0.2, help='SNR step size')
     parser.add_argument('--trials',   type=int,   default=500,
-                        help='Trials per SNR point (fewer than snr_scan for speed)')
+                        help='Trials per SNR point')
 
     # ---------- Window scan parameters ----------
     parser.add_argument('--window-min',  type=int, default=40,
-                        help='Minimum power-sum window (samples)')
+                        help='Minimum power-sum window (samples) [windows mode]')
     parser.add_argument('--window-max',  type=int, default=320,
-                        help='Maximum power-sum window (samples)')
+                        help='Maximum power-sum window (samples) [windows mode]')
     parser.add_argument('--window-step', type=int, default=40,
-                        help='Step size for window scan (samples)')
+                        help='Step size for the window scan (samples) [windows mode]')
     parser.add_argument('--step',        type=int, default=40,
-                        help='Power-sum sliding step (samples); held fixed across scan')
+                        help='Power-sum stride (samples); fixed during windows/filter scans')
+    parser.add_argument('--window-threshold-jsons', type=str, nargs='+', default=None,
+                        help='Per-window threshold JSON files, one per window value in the '
+                             'scan grid (in order, after filtering out windows < stride). '
+                             'Each JSON is loaded for --threshold-index. '
+                             'If omitted, --threshold-json / --threshold is used for all windows.')
+
+    # ---------- Stride (step) scan parameters ----------
+    parser.add_argument('--step-min',       type=int, default=10,
+                        help='Minimum stride (samples) [step mode]')
+    parser.add_argument('--step-max',       type=int, default=160,
+                        help='Maximum stride (samples) [step mode]')
+    parser.add_argument('--step-scan-step', type=int, default=10,
+                        help='Increment for stride scan (samples) [step mode]')
+    parser.add_argument('--window',         type=int, default=160,
+                        help='Fixed power-sum window (samples) used in step/filter modes')
+
+    # ---------- Filter frequency scan parameters ----------
+    parser.add_argument('--filter-freqs-ghz', type=float, nargs='+',
+                        default=[1.5, 1.25, 1.0, 0.75],
+                        help='Filter cutoff frequencies in GHz to scan [filter mode]. '
+                             'The first value is the baseline (no second filter).')
+    parser.add_argument('--filter-threshold-jsons', type=str, nargs='+', default=None,
+                        help='Threshold JSON files for each non-baseline filter frequency, '
+                             'in the same order as --filter-freqs-ghz[1:]. '
+                             'If omitted, the reference threshold is used for all fc values.')
 
     # ---------- Antenna selection ----------
     parser.add_argument('--antennas', type=int, nargs='+', default=None,
-                        help='Physical antenna indices to use, e.g. --antennas 0 1 2 3 '
-                             '(default: all four)')
+                        help='Physical antenna indices (default: all four)')
 
     # ---------- False-rate scan parameters ----------
     parser.add_argument('--noise-dir',    type=str,   default='noise',
@@ -555,13 +998,11 @@ if __name__ == '__main__':
     parser.add_argument('--chunk-duration', type=float, default=0.05,
                         help='Chunk size for noise processing (sec)')
     parser.add_argument('--thr-min',      type=float, default=0.5,
-                        help='Minimum threshold to scan for falserate mode')
+                        help='Minimum threshold to scan [falserate mode]')
     parser.add_argument('--thr-max',      type=float, default=10.0,
-                        help='Maximum threshold to scan for falserate mode')
+                        help='Maximum threshold to scan [falserate mode]')
     parser.add_argument('--thr-step',     type=float, default=0.05,
-                        help='Threshold step for falserate mode')
-    parser.add_argument('--n-beams',      type=int,   default=100,
-                        help='Number of active beams for global rate estimate')
+                        help='Threshold step [falserate mode]')
     parser.add_argument('--threshold-marker', type=float, default=None,
                         help='Mark this threshold on the falserate plot')
     parser.add_argument('--rate-target',  type=float, default=None,
@@ -574,16 +1015,69 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    # ---- Resolve n_beams, coincidence_window, and threshold from JSON ----
+    n_beams_resolved           = 63      # CoRaLS default
+    coincidence_window_resolved = 100.0  # ns default
+    threshold_resolved          = None
+
+    if args.threshold_json is not None:
+        with open(args.threshold_json, 'r') as _f:
+            _thr_data = json.load(_f)
+        n_beams_resolved            = _thr_data.get('n_beams', n_beams_resolved)
+        coincidence_window_resolved = _thr_data.get('coincidence_window_ns',
+                                                     coincidence_window_resolved)
+        _entries = _thr_data['thresholds']
+        _idx = args.threshold_index if args.threshold_index is not None else 0
+        threshold_resolved = _entries[_idx]['threshold_lhcp']
+        print(f"Loaded from {args.threshold_json}: "
+              f"n_beams={n_beams_resolved}, "
+              f"coinc_window={coincidence_window_resolved:.1f} ns, "
+              f"threshold={threshold_resolved:.4f} (entry {_idx})")
+
+    # CLI overrides take precedence
+    if args.n_beams is not None:
+        n_beams_resolved = args.n_beams
+    if args.coincidence_window is not None:
+        coincidence_window_resolved = args.coincidence_window
+    if args.threshold is not None:
+        threshold_resolved = args.threshold
+    if threshold_resolved is None:
+        threshold_resolved = 3.12  # fallback if no JSON and no --threshold
+        print(f"No --threshold or --threshold-json provided; using default threshold="
+              f"{threshold_resolved}")
+
     snr_grid = np.arange(args.snr_min, args.snr_max + 0.5 * args.snr_step, args.snr_step)
 
     # -------------------------------------------------------------------------
     if args.mode == 'windows':
+        # Build per-window threshold dict if calibrated JSONs are provided.
+        # Replicate the same window grid + guard logic used inside optimize_windows
+        # so indices align with --window-threshold-jsons order.
+        _win_all = np.arange(args.window_min, args.window_max + 1, args.window_step, dtype=int)
+        _valid_wins = _win_all[_win_all >= args.step]
+        if args.window_threshold_jsons:
+            if len(args.window_threshold_jsons) != len(_valid_wins):
+                parser.error(
+                    f'--window-threshold-jsons: expected {len(_valid_wins)} files '
+                    f'(one per valid window in {_valid_wins.tolist()}), '
+                    f'got {len(args.window_threshold_jsons)}')
+            _idx = args.threshold_index if args.threshold_index is not None else 0
+            thresholds_per_window = {}
+            for win, json_path in zip(_valid_wins, args.window_threshold_jsons):
+                with open(json_path, 'r') as _f:
+                    _jdata = json.load(_f)
+                thresholds_per_window[int(win)] = _jdata['thresholds'][_idx]['threshold_lhcp']
+                print(f"  window={win}: threshold={thresholds_per_window[int(win)]:.4f} "
+                      f"(from {json_path}, entry {_idx})")
+        else:
+            thresholds_per_window = threshold_resolved
+
         opt = optimize_windows(
             phi=args.phi,
             theta=args.theta,
             psi=args.psi,
-            threshold=args.threshold,
-            coincidence_window=args.coincidence_window,
+            thresholds_per_window=thresholds_per_window,
+            coincidence_window=coincidence_window_resolved,
             snr_grid=snr_grid,
             n_trials=args.trials,
             window_grid=(args.window_min, args.window_max, args.window_step),
@@ -602,6 +1096,77 @@ if __name__ == '__main__':
               f"→  SNR50 = {opt['snr50'][best_idx]:.3f}")
 
     # -------------------------------------------------------------------------
+    elif args.mode == 'step':
+        opt = optimize_step(
+            phi=args.phi,
+            theta=args.theta,
+            psi=args.psi,
+            threshold=threshold_resolved,
+            coincidence_window=coincidence_window_resolved,
+            snr_grid=snr_grid,
+            n_trials=args.trials,
+            window=args.window,
+            step_grid=(args.step_min, args.step_max, args.step_scan_step),
+            save_filename=args.save,
+            antennas=args.antennas,
+        )
+
+        if not args.no_plot:
+            plot_step_optimization(opt, save_filename=args.save)
+
+        best_idx = int(np.nanargmin(opt['snr50']))
+        print(f"\n=== Optimization Complete ===")
+        print(f"Best stride: {opt['steps'][best_idx]} samples "
+              f"({opt['steps_ns'][best_idx]:.1f} ns)  "
+              f"→  SNR50 = {opt['snr50'][best_idx]:.3f}")
+
+    # -------------------------------------------------------------------------
+    elif args.mode == 'filter':
+        fc_hz_list = [f * 1e9 for f in args.filter_freqs_ghz]
+
+        # Build per-fc threshold map
+        thresholds_per_fc = {fc_hz_list[0]: threshold_resolved}
+        if args.filter_threshold_jsons:
+            for fc, json_path in zip(fc_hz_list[1:], args.filter_threshold_jsons):
+                with open(json_path, 'r') as _fj:
+                    _jdata = json.load(_fj)
+                _idx = args.threshold_index if args.threshold_index is not None else 0
+                thresholds_per_fc[fc] = _jdata['thresholds'][_idx]['threshold_lhcp']
+                print(f"  fc={fc/1e6:.0f} MHz: threshold={thresholds_per_fc[fc]:.4f} "
+                      f"(from {json_path})")
+        else:
+            for fc in fc_hz_list[1:]:
+                thresholds_per_fc[fc] = threshold_resolved
+            if len(fc_hz_list) > 1:
+                print("NOTE: No --filter-threshold-jsons provided; using reference threshold "
+                      f"({threshold_resolved:.4f}) for all filter frequencies. "
+                      "Re-calibrate thresholds per fc with generate_threshold_curves_dualpol.py "
+                      "for accurate results.")
+
+        opt = optimize_filter_freq(
+            phi=args.phi,
+            theta=args.theta,
+            psi=args.psi,
+            fc_hz_list=fc_hz_list,
+            thresholds_per_fc=thresholds_per_fc,
+            coincidence_window=coincidence_window_resolved,
+            snr_grid=snr_grid,
+            n_trials=args.trials,
+            window=args.window,
+            step=args.step,
+            save_filename=args.save,
+            antennas=args.antennas,
+        )
+
+        if not args.no_plot:
+            plot_filter_optimization(opt, save_filename=args.save)
+
+        best_idx = int(np.nanargmin(opt['snr50']))
+        print(f"\n=== Optimization Complete ===")
+        print(f"Best filter frequency: {opt['fc_mhz'][best_idx]:.0f} MHz  "
+              f"→  SNR50 = {opt['snr50'][best_idx]:.3f}")
+
+    # -------------------------------------------------------------------------
     elif args.mode == 'falserate':
         thr_grid = np.arange(args.thr_min, args.thr_max + 0.5 * args.thr_step, args.thr_step)
 
@@ -614,8 +1179,8 @@ if __name__ == '__main__':
             duration_sec=args.duration,
             chunk_duration_sec=args.chunk_duration,
             threshold_grid=thr_grid,
-            coincidence_window=args.coincidence_window,
-            n_beams=args.n_beams,
+            coincidence_window=coincidence_window_resolved,
+            n_beams=n_beams_resolved,
             save_filename=args.save,
         )
 

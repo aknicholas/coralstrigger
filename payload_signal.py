@@ -424,6 +424,9 @@ if __name__ =='__main__':
                        help='Enable second 750 MHz lowpass filter (overrides module APPLY_SECOND_FILTER)')
     parser.add_argument('--no-second-filter', dest='second_filter', action='store_false',
                        help='Disable second filter (overrides module APPLY_SECOND_FILTER)')
+    parser.add_argument('--snr', type=float, default=None,
+                       help='Add independent white noise to each antenna at this SNR '
+                            '(Vpp/2\u03c3 per channel). Omit for noise-free chain.')
     args = parser.parse_args()
 
     # Resolve toggle: CLI flag beats module constant
@@ -475,7 +478,25 @@ if __name__ =='__main__':
     print(f"  Beam multipliers (pol × beam pattern):")
     print(f"    H-pol: {multipliers[0]:.4f}, {multipliers[1]:.4f}, {multipliers[2]:.4f}, {multipliers[3]:.4f}")
     print(f"    V-pol: {multipliers[4]:.4f}, {multipliers[5]:.4f}, {multipliers[6]:.4f}, {multipliers[7]:.4f}")
-    
+
+    # ========== NOISE OVERLAY (optional) ==========
+    _noise_label = 'no noise'
+    if args.snr is not None:
+        print(f"\nNOISE OVERLAY: SNR = {args.snr:.2f}  (Vpp / 2\u03c3 per antenna)")
+        _rng = numpy.random.default_rng()
+        _vpp_vals = []
+        for _ch in range(8):
+            _vpp = numpy.max(waveforms[_ch]) - numpy.min(waveforms[_ch])
+            if _vpp < 1e-10:
+                # zero-signal channel (e.g. H-pol when psi=90°) — skip noise
+                continue
+            _vrms = _vpp / (2.0 * args.snr)
+            waveforms[_ch] = waveforms[_ch] + _rng.normal(0.0, _vrms, waveforms.shape[1])
+            _vpp_vals.append(_vpp)
+            print(f"  Ch{_ch}: Vpp={_vpp:.4f}  vrms_noise={_vrms:.4f}")
+        _noise_label = f'SNR={args.snr:.1f}'
+        print(f"  White noise added; gets bandlimited by downstream filter.")
+
     # ========== STEP 3: COHERENT SUM (TIME DOMAIN -  ) ==========
     print("\nSTEP 3: Coherent sum with geometric delays")
     delays_ns = getRemappedDelays(phi, el, antennas=[0, 1, 2, 3])
@@ -758,6 +779,37 @@ if __name__ =='__main__':
                   transform=ax12.transAxes, ha='center', fontsize=9,
                   bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5))
     
+    # ---- Power-sum + coincidence logic (used in Row 5 panel 10d) ----
+    _ps_window, _ps_step = 160, 40                           # hardware parameters (samples)
+    pw_lhcp_sum, _n_ps_fr = csum.powerSum(lhcp, window=_ps_window, step=_ps_step)
+    pw_rhcp_sum, _         = csum.powerSum(rhcp, window=_ps_window, step=_ps_step)
+    # Frame time axis: start of each sliding window
+    _dt_ns   = (tb_digitized[1] - tb_digitized[0])           # ns per ADC sample
+    _step_ns = _ps_step   * _dt_ns                           # 10 ns between frames
+    _win_ns  = _ps_window * _dt_ns                           # 40 ns window width
+    ps_frame_t = tb_digitized[0] + numpy.arange(_n_ps_fr) * _step_ns
+    # Load threshold from JSON (same powerSum units, no n_ant normalization)
+    import json as _json, os as _os
+    _thr_lhcp = _thr_rhcp = None
+    _thr_label = 'threshold'
+    _json_path = 'noise/threshold_analysis_dualpol.json'
+    if _os.path.exists(_json_path):
+        with open(_json_path) as _jf:
+            _jd = _json.load(_jf)
+        for _jentry in _jd.get('thresholds', []):
+            if abs(_jentry.get('target_global_rate_hz', -1) - 0.1) < 0.01:
+                _thr_lhcp = _jentry['threshold_lhcp']
+                _thr_rhcp = _jentry['threshold_rhcp']
+                _thr_label = (f"T={_thr_lhcp:.2f} "
+                              f"({_jd.get('n_beams',63)} beams, 0.1 Hz)")
+                break
+    if _thr_lhcp is None:
+        _thr_lhcp = _thr_rhcp = 0.5 * max(pw_lhcp_sum.max(), pw_rhcp_sum.max())
+        _thr_label = '50% peak (no JSON)'
+    _coinc_l = pw_lhcp_sum >= _thr_lhcp
+    _coinc_r = pw_rhcp_sum >= _thr_rhcp
+    _coinc   = _coinc_l & _coinc_r
+
     # Row 5: Time domain circular signals (reconstructed from circular spectra)
     if 5 in show_rows:
         r = row_map[5]
@@ -787,22 +839,56 @@ if __name__ =='__main__':
         ax15.set_title('10c. Overlaid Signals', fontweight='bold')
         ax15.set_xlabel('Time [ns]')
         ax15.set_ylabel('Voltage [V]')
-        ax15.set_xlim([0,60])
         ax15.legend()
         ax15.grid(True, alpha=0.3)
     
         ax16 = fig.add_subplot(gs[r, 3])
-        ax16.plot(tb_digitized, lhcp**2, 'b-', linewidth=2, label='LHCP')
-        ax16.plot(tb_digitized, rhcp**2, 'r-', linewidth=2, label='RHCP')
-        ax16.set_title('10d. Instantaneous Power', fontweight='bold')
+        # Instantaneous power as light background traces
+        ax16.plot(tb_digitized, lhcp**2, color='steelblue', linewidth=0.8,
+                  alpha=0.25, label='_nolegend_')
+        ax16.plot(tb_digitized, rhcp**2, color='firebrick',  linewidth=0.8,
+                  alpha=0.25, label='_nolegend_')
+        # Sliding-window power sum (step plot, one value per 10 ns step)
+        # Append a closing point so the last frame gets its full visible width
+        _ps_t_closed = numpy.append(ps_frame_t, ps_frame_t[-1] + _step_ns)
+        _pw_l_closed = numpy.append(pw_lhcp_sum, pw_lhcp_sum[-1])
+        _pw_r_closed = numpy.append(pw_rhcp_sum, pw_rhcp_sum[-1])
+        ax16.step(_ps_t_closed, _pw_l_closed, where='post',
+                  color='steelblue', linewidth=2.0, label='LHCP power sum')
+        ax16.step(_ps_t_closed, _pw_r_closed, where='post',
+                  color='firebrick',  linewidth=2.0, label='RHCP power sum')
+        # Threshold line from noise analysis
+        ax16.axhline(_thr_lhcp, color='k', linestyle='--', linewidth=1.5,
+                     label=_thr_label)
+        # Shade each 10 ns step interval by trigger state
+        #   green  = both LHCP and RHCP above threshold (coincidence)
+        #   blue   = LHCP only above threshold
+        #   red    = RHCP only above threshold
+        for _i, (_t, _cl, _cr, _cc) in enumerate(
+                zip(ps_frame_t, _coinc_l, _coinc_r, _coinc)):
+            _t1, _t2 = float(_t), float(_t) + _step_ns
+            if _cc:
+                ax16.axvspan(_t1, _t2, alpha=0.30, color='limegreen', zorder=-1)
+            elif _cl:
+                ax16.axvspan(_t1, _t2, alpha=0.20, color='steelblue', zorder=-1)
+            elif _cr:
+                ax16.axvspan(_t1, _t2, alpha=0.20, color='firebrick',  zorder=-1)
+        # Annotation box
+        ax16.text(0.02, 0.98,
+                  f'Coinc frames : {int(_coinc.sum())}/{_n_ps_fr}\n'
+                  f'LHCP trig    : {int(_coinc_l.sum())}\n'
+                  f'RHCP trig    : {int(_coinc_r.sum())}\n'
+                  f'Green=coinc  Blue/Red=single-pol',
+                  transform=ax16.transAxes, va='top', fontsize=7,
+                  bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.7))
+        ax16.set_title('10d. Power Sum & Coincidence', fontweight='bold')
         ax16.set_xlabel('Time [ns]')
-        ax16.set_ylabel('Power [V²]')
-        ax16.legend()
+        ax16.set_ylabel('Power [V²/sample]')
+        ax16.legend(fontsize=7, loc='upper right')
         ax16.grid(True, alpha=0.3)
-        ax16.set_xlim([0,60])
-        #ax16.text(0.5, 0.9, 'Power = |signal|²', 
-        #          transform=ax16.transAxes, ha='center', fontsize=9,
-        #          bbox=dict(boxstyle='round', facecolor='orange', alpha=0.5))
+        # xlim spans exactly the frames present - no clipping, count and shading are consistent
+        _t_end = ps_frame_t[-1] + _win_ns   # end of last window
+        ax16.set_xlim([tb_digitized[0], _t_end])
     
     # Row 6: Summary and comparisons
     if 6 in show_rows:
@@ -855,11 +941,13 @@ if __name__ =='__main__':
                   bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
         ax18.axis('off')
     
-    plt.suptitle(f'Complete Dual-Pol Signal Processing Chain: φ={phi}°, θ={el}°, ψ={psi}°', 
-                 fontsize=18, fontweight='bold', y=0.995)
+    _filt_label = '1.5G+750M' if apply_second_filter else '1.5G only'
+    plt.suptitle(f'Complete Dual-Pol Signal Processing Chain: φ={phi}°, θ={el}°, ψ={psi}°  '
+                 f'[filter: {_filt_label}  |  {_noise_label}]',
+                 fontsize=16, fontweight='bold', y=0.995)
     
     if not args.no_save:
-        plt.savefig('plots/dualpol_processing_chain.png', dpi=150, bbox_inches='tight')
+        plt.savefig('plots/dualpol_processing_chain.png', dpi=300, bbox_inches='tight')
         print(f"\n{'='*70}")
         print(f"Saved comprehensive diagnostic plot to:")
         print(f"  plots/dualpol_processing_chain.png")

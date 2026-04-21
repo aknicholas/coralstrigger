@@ -324,7 +324,7 @@ Wavefront Direction:
 Green arrows: Antenna pointing (phi_ant, theta_ant)
 Red arrows: Incoming wave direction'''
     
-    fig.text(0.65, 0.1, info_text, fontsize=10, verticalalignment='bottom',
+    fig.text(0.6, 0.1, info_text, fontsize=10, verticalalignment='bottom',
             horizontalalignment='left', family='monospace', 
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8, pad=0.8))
     
@@ -335,5 +335,5 @@ Red arrows: Incoming wave direction'''
     plt.show()
 
 if __name__=='__main__':
-    drawWavefrontPlanes(incoming_wave=True, phi=20, theta=-10, show_labels= False)
+    drawWavefrontPlanes(incoming_wave=True, phi=30, theta=20, show_labels= False)
     #drawPayload(incoming_wave=False, phi=90, theta=0)

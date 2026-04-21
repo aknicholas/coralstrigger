@@ -85,7 +85,8 @@ def load_dualpol_noise(noise_dir='noise', duration_sec=None, start_sample=0):
 def generate_power_dualpol_chunked(noise_dir='noise', duration_sec=0.5, 
                                    chunk_duration_sec=0.05,
                                    sample_rate_hz=None, window=160, step=40,
-                                   phi_deg=0, theta_deg=-30, apply_filter=True):
+                                   phi_deg=0, theta_deg=-30, apply_filter=True,
+                                   apply_second_filter=False, fc_second=750e6):
     """
     Generate power sums for dual-pol noise with beamforming - CHUNKED PROCESSING.
     
@@ -110,7 +111,11 @@ def generate_power_dualpol_chunked(noise_dir='noise', duration_sec=0.5,
     theta_deg : float
         Elevation angle for beamforming (degrees)
     apply_filter : bool
-        Apply Shannon-Whitaker digital lowpass filter
+        Apply Shannon-Whitaker digital lowpass filter (1.5 GHz)
+    apply_second_filter : bool
+        Apply second lowpass filter after Shannon-Whitaker (default: False)
+    fc_second : float
+        Cutoff frequency of second filter in Hz (default: 750 MHz)
     
     Returns
     -------
@@ -161,7 +166,8 @@ def generate_power_dualpol_chunked(noise_dir='noise', duration_sec=0.5,
     
     print(f"\nBeamforming configuration:")
     print(f"  Direction: phi={phi_deg}°, theta={theta_deg}°")
-    print(f"  Filter: Shannon-Whitaker {'enabled' if apply_filter else 'disabled'}")
+    print(f"  Filter 1 (1.5 GHz Shannon-Whitaker): {'enabled' if apply_filter else 'disabled'}")
+    print(f"  Filter 2 ({fc_second/1e6:.0f} MHz lowpass): {'enabled' if apply_second_filter else 'disabled'}")
     
     # Get geometric delays for beamforming direction
     n_ant = noise_h_mmap.shape[0]
@@ -187,10 +193,15 @@ def generate_power_dualpol_chunked(noise_dir='noise', duration_sec=0.5,
         noise_h_chunk = np.array(noise_h_mmap[:, start_sample:end_sample])
         noise_v_chunk = np.array(noise_v_mmap[:, start_sample:end_sample])
         
-        # Apply Shannon-Whitaker filter
+        # Apply Shannon-Whitaker filter (1.5 GHz)
         if apply_filter:
             noise_h_chunk = filters.apply_Shannon_Whitaker_filter(noise_h_chunk, fs=sample_rate_hz)
             noise_v_chunk = filters.apply_Shannon_Whitaker_filter(noise_v_chunk, fs=sample_rate_hz)
+        
+        # Apply second lowpass filter (e.g. 750 MHz)
+        if apply_second_filter:
+            noise_h_chunk = filters.apply_Shannon_Whitaker_filter(noise_h_chunk, fs=sample_rate_hz, fc=fc_second)
+            noise_v_chunk = filters.apply_Shannon_Whitaker_filter(noise_v_chunk, fs=sample_rate_hz, fc=fc_second)
         
         # Create timebase for this chunk
         dt = 1.0 / sample_rate_hz * 1e9  # ns
@@ -247,6 +258,8 @@ def main():
     parser.add_argument('--phi', type=float, default=0.0, help='Azimuth angle (deg)')
     parser.add_argument('--theta', type=float, default=-30.0, help='Elevation angle (deg)')
     parser.add_argument('--no-filter', action='store_true', help='Disable Shannon-Whitaker filter')
+    parser.add_argument('--apply-second-filter', action='store_true', help='Apply second 750 MHz lowpass filter after Shannon-Whitaker')
+    parser.add_argument('--fc-second', type=float, default=750e6, help='Second filter cutoff frequency in Hz (default: 750e6)')
     parser.add_argument('--suffix', type=str, default='', help='Suffix appended to output filenames, e.g. "_nofilter" to distinguish runs')
     parser.add_argument('--output-dir', default='noise', help='Output directory')
     
@@ -277,14 +290,23 @@ def main():
         chunk_duration_sec=args.chunk_duration,
         window=args.window, step=args.step,
         phi_deg=args.phi, theta_deg=args.theta,
-        apply_filter=not args.no_filter
+        apply_filter=not args.no_filter,
+        apply_second_filter=args.apply_second_filter,
+        fc_second=args.fc_second,
     )
     
     # Save results
     output_path = Path(args.output_dir)
     output_path.mkdir(exist_ok=True)
     
-    suffix = args.suffix if args.suffix else ('_nofilter' if args.no_filter else '')
+    if args.suffix:
+        suffix = args.suffix
+    elif args.no_filter:
+        suffix = '_nofilter'
+    elif args.apply_second_filter:
+        suffix = f'_filt2_{int(args.fc_second/1e6)}MHz'
+    else:
+        suffix = ''
     lhcp_file = output_path / f'power_lhcp_{args.window}_{args.step}{suffix}.npy'
     rhcp_file = output_path / f'power_rhcp_{args.window}_{args.step}{suffix}.npy'
     

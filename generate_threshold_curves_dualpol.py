@@ -151,28 +151,40 @@ def main():
     parser.add_argument('--thr-min', type=float, default=0.5, help='Min threshold to scan')
     parser.add_argument('--thr-max', type=float, default=10.0, help='Max threshold to scan')
     parser.add_argument('--thr-step', type=float, default=0.05, help='Threshold step')
-    parser.add_argument('--n-beams', type=int, default=100, help='Number of active beams')
+    parser.add_argument('--n-beams', type=int, default=100, help='Number of active beams (overridden by --beam-data-file)')
+    parser.add_argument('--beam-data-file', type=str, default=None,
+                       help='Path to beam optimization .npy file (e.g. plots/optimal_beams_sprint6.npy). '
+                            'If provided, n_beams is set to the number of selected beams in the file.')
     parser.add_argument('--target-rate', type=float, nargs='+', default=[0.1], 
                        help='Target global trigger rates (Hz)')
-    parser.add_argument('--coincidence-window', type=float, default=100.0,
+    parser.add_argument('--coincidence-window', type=float, default=20.0,
                        help='Coincidence window (ns)')
     parser.add_argument('--fit-thr-min', type=float, default=None,
                        help='Min threshold for fit region (overrides auto-detection)')
     parser.add_argument('--fit-thr-max', type=float, default=None,
                        help='Max threshold for fit region (overrides auto-detection)')
-    parser.add_argument('--fit-min-hits', type=float, default=3,
+    parser.add_argument('--fit-min-hits', type=float, default=300,
                        help='Min hits for auto fit region')
     parser.add_argument('--fit-max-hits', type=float, default=2e4,
                        help='Max hits for auto fit region')
     parser.add_argument('--output-dir', default='noise', help='Output directory')
     parser.add_argument('--plot', action='store_true', help='Generate plots')
-    parser.add_argument('--plot-thr-max', type=float, default=3.5, 
+    parser.add_argument('--plot-thr-max', type=float, default=5.3, 
                        help='Max threshold to show in plots (default 3.5)')
+    parser.add_argument('--suffix', type=str, default='',
+                       help='Suffix of power files to load, e.g. "_filt2_750MHz" '
+                            '(default: no suffix = first-filter-only files)')
     parser.add_argument('--compare-suffix', type=str, default=None,
                        help='Load a second set of power files with this suffix for sanity-check overlay, '
                             'e.g. "_nofilter" to compare filtered vs unfiltered noise rates')
     
     args = parser.parse_args()
+    
+    # Override n_beams from beam optimization file if provided
+    if args.beam_data_file is not None:
+        beam_data = np.load(args.beam_data_file, allow_pickle=True).item()
+        args.n_beams = len(beam_data['selected_beams'])
+        print(f"Loaded beam count from {args.beam_data_file}: n_beams = {args.n_beams}")
     
     print("=" * 70)
     print("DUAL-POL THRESHOLD CURVE ANALYSIS")
@@ -183,8 +195,9 @@ def main():
     
     # Load power files
     noise_path = Path(args.noise_dir)
-    lhcp_file = noise_path / f'power_lhcp_{args.window}_{args.step}.npy'
-    rhcp_file = noise_path / f'power_rhcp_{args.window}_{args.step}.npy'
+    suffix = args.suffix
+    lhcp_file = noise_path / f'power_lhcp_{args.window}_{args.step}{suffix}.npy'
+    rhcp_file = noise_path / f'power_rhcp_{args.window}_{args.step}{suffix}.npy'
     
     if not lhcp_file.exists() or not rhcp_file.exists():
         print(f"Error: Power files not found in {args.noise_dir}/")
@@ -337,12 +350,14 @@ def main():
     output_path = Path(args.output_dir)
     output_path.mkdir(exist_ok=True)
     
-    results_file = output_path / 'threshold_analysis_dualpol.json'
+    file_suffix = args.suffix  # e.g. '' or '_filt2_750MHz'
+    results_file = output_path / f'threshold_analysis_dualpol{file_suffix}.json'
     with open(results_file, 'w') as f:
         json.dump({
             'n_beams': args.n_beams,
             'coincidence_window_ns': args.coincidence_window,
             'observation_time_sec': obs_time,
+            'power_file_suffix': file_suffix,
             'fit_parameters': {
                 'lhcp': {'A': float(A_lhcp), 'B': float(B_lhcp)},
                 'rhcp': {'A': float(A_rhcp), 'B': float(B_rhcp)}
@@ -354,7 +369,7 @@ def main():
     print(f"Saved: {results_file}")
     
     # Save threshold scan data
-    scan_file = output_path / 'threshold_scan_dualpol.npz'
+    scan_file = output_path / f'threshold_scan_dualpol{file_suffix}.npz'
     np.savez(scan_file,
              thresholds=thresholds,
              rate_lhcp=rate_lhcp,
@@ -369,6 +384,9 @@ def main():
     
     # Plot if requested
     if args.plot:
+        plots_path = Path('plots')
+        plots_path.mkdir(exist_ok=True)
+
         # Restrict plotting to region with good statistics
         plot_mask = thresholds <= args.plot_thr_max
         thr_plot = thresholds[plot_mask]
@@ -449,7 +467,7 @@ def main():
         ax.legend()
         
         plt.tight_layout()
-        plot_file = output_path / 'threshold_curves_dualpol.png'
+        plot_file = plots_path / f'threshold_curves_dualpol{file_suffix}.png'
         plt.savefig(plot_file, dpi=150)
         print(f"Saved: {plot_file}")
         plt.show()
@@ -497,7 +515,7 @@ def main():
                 ax.grid(True, alpha=0.3)
 
             plt.tight_layout()
-            cmp_plot_file = output_path / f'threshold_compare{sfx}.png'
+            cmp_plot_file = plots_path / f'threshold_compare{sfx}.png'
             plt.savefig(cmp_plot_file, dpi=150)
             print(f"Saved: {cmp_plot_file}")
             plt.show()
