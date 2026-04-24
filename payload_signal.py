@@ -411,7 +411,40 @@ if __name__ =='__main__':
     sys.path.insert(0, '../')
     import coherent_sum as csum
     import tools.filters as filters
-    
+
+    def _save_axes_individually(fig, base_name, plots_dir='plots'):
+        """Save each titled axes in fig as its own PNG, stripping step-number prefixes."""
+        import re, os
+        from matplotlib.transforms import Bbox
+
+        os.makedirs(plots_dir, exist_ok=True)
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        dpi = fig.get_dpi()
+        pad_px = 14
+
+        for ax in fig.get_axes():
+            title = ax.get_title()
+            if not title:
+                continue
+            # Strip leading step prefix: "1. ", "2a. ", "10d. ", etc.
+            clean_title = re.sub(r'^\d+[a-zA-Z]?\.\s+', '', title)
+            # Filename: use first line only, sanitize to alphanumeric/underscore
+            fname = re.sub(r'[^a-zA-Z0-9]+', '_',
+                           clean_title.split('\n')[0]).strip('_').lower()
+            out_path = os.path.join(plots_dir, f'{base_name}_{fname}.png')
+            bbox_disp = ax.get_tightbbox(renderer)
+            if bbox_disp is None:
+                continue
+            bbox_in = Bbox([
+                [(bbox_disp.x0 - pad_px) / dpi, (bbox_disp.y0 - pad_px) / dpi],
+                [(bbox_disp.x1 + pad_px) / dpi, (bbox_disp.y1 + pad_px) / dpi],
+            ])
+            ax.set_title(clean_title, fontweight='bold')
+            fig.savefig(out_path, dpi=150, bbox_inches=bbox_in)
+            ax.set_title(title, fontweight='bold')
+            print(f'  Saved: {out_path}')
+
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='Dual-pol signal processing visualization')
     parser.add_argument('--phi', type=float, default=20, help='Azimuth angle (deg)')
@@ -427,6 +460,9 @@ if __name__ =='__main__':
     parser.add_argument('--snr', type=float, default=None,
                        help='Add independent white noise to each antenna at this SNR '
                             '(Vpp/2\u03c3 per channel). Omit for noise-free chain.')
+    parser.add_argument('--save-subplots', action='store_true',
+                       help='Save every subplot panel as an individual PNG '
+                            '(strips step-number prefixes from titles, for LaTeX subfigure use).')
     args = parser.parse_args()
 
     # Resolve toggle: CLI flag beats module constant
@@ -953,6 +989,11 @@ if __name__ =='__main__':
         print(f"  plots/dualpol_processing_chain.png")
         print(f"{'='*70}\n")
 
+    if args.save_subplots:
+        print("Saving processing chain subplots individually...")
+        _save_axes_individually(fig, 'processing_chain')
+        print("")
+
     # =========================================================================
     # AUXILIARY NOISE FIGURE — amplitude before and after filter stages
     # =========================================================================
@@ -1046,6 +1087,11 @@ if __name__ =='__main__':
     if not args.no_save:
         plt.savefig('plots/noise_filter_comparison.png', dpi=150, bbox_inches='tight')
         print(f"Saved noise comparison plot to: plots/noise_filter_comparison.png")
+
+    if args.save_subplots:
+        print("Saving noise filter subplots individually...")
+        _save_axes_individually(fig_noise, 'noise_filter')
+        print("")
 
     # Print RMS reduction summary
     print(f"\nNoise RMS (white input, {fs_adc/1e9:.1f} GHz):")

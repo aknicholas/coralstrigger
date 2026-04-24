@@ -305,7 +305,7 @@ def optimize_filter_freq(phi, theta, psi, fc_hz_list, thresholds_per_fc,
     return opt_results
 
 
-def optimize_step(phi, theta, psi, threshold, coincidence_window,
+def optimize_step(phi, theta, psi, thresholds_per_step, coincidence_window,
                   snr_grid, n_trials, window, step_grid,
                   save_filename=None, antennas=None):
     """
@@ -320,8 +320,11 @@ def optimize_step(phi, theta, psi, threshold, coincidence_window,
     ----------
     phi, theta, psi : float
         Signal arrival angles (deg).
-    threshold : float
-        Normalized power threshold (applied to both LHCP and RHCP).
+    thresholds_per_step : dict or float
+        Per-step thresholds: dict mapping step (samples, int) -> threshold float,
+        or a single float used for all steps. Using a per-step dict is strongly
+        preferred because smaller strides produce more frames/sec and require a
+        higher threshold to hold the same false rate in Hz.
     coincidence_window : float
         Coincidence time window (ns).
     snr_grid : array
@@ -341,7 +344,7 @@ def optimize_step(phi, theta, psi, threshold, coincidence_window,
     -------
     dict with keys:
         steps, steps_ns, snr50, window, window_ns,
-        phi, theta, psi, threshold, coincidence_window, n_trials
+        phi, theta, psi, thresholds_per_step, coincidence_window, n_trials
     """
     step_min, step_max, step_scan_step = step_grid
     steps = np.arange(step_min, step_max + 1, step_scan_step, dtype=int)
@@ -361,7 +364,10 @@ def optimize_step(phi, theta, psi, threshold, coincidence_window,
 
     print(f"\n=== Power-Sum Stride Optimization ===")
     print(f"Direction: phi={phi:.1f}°, theta={theta:.1f}°, psi={psi:.1f}°")
-    print(f"Threshold: {threshold:.4f}  |  Coincidence window: {coincidence_window:.1f} ns")
+    if isinstance(thresholds_per_step, dict):
+        print(f"Thresholds: per-step (calibrated)  |  Coincidence window: {coincidence_window:.1f} ns")
+    else:
+        print(f"Threshold: {float(thresholds_per_step):.4f}  |  Coincidence window: {coincidence_window:.1f} ns")
     print(f"Window: {window} samples ({window_ns:.1f} ns)  [fixed]")
     print(f"Stride range: {steps[0]}–{steps[-1]} samples "
           f"({steps[0]*sample_ns:.1f}–{steps[-1]*sample_ns:.1f} ns)  "
@@ -372,14 +378,21 @@ def optimize_step(phi, theta, psi, threshold, coincidence_window,
 
     for step in steps:
         step_ns = step * sample_ns
-        print(f"\n--- Stride = {step} samples ({step_ns:.1f} ns) ---")
+        if isinstance(thresholds_per_step, dict):
+            thr = thresholds_per_step.get(
+                int(step),
+                next(iter(thresholds_per_step.values()))
+            )
+        else:
+            thr = float(thresholds_per_step)
+        print(f"\n--- Stride = {step} samples ({step_ns:.1f} ns), threshold={thr:.4f} ---")
 
         res = snr_scan.run_snr_scan_dualpol(
             phi=phi,
             theta=theta,
             psi=psi,
-            threshold_lhcp=threshold,
-            threshold_rhcp=threshold,
+            threshold_lhcp=thr,
+            threshold_rhcp=thr,
             coincidence_window=coincidence_window,
             snr_grid=snr_grid,
             n_trials=n_trials,
@@ -396,28 +409,30 @@ def optimize_step(phi, theta, psi, threshold, coincidence_window,
     steps_ns = steps * sample_ns
 
     opt_results = {
-        'steps':              steps,
-        'steps_ns':           steps_ns,
-        'snr50':              np.array(snr50_list),
-        'window':             window,
-        'window_ns':          window_ns,
-        'phi':                phi,
-        'theta':              theta,
-        'psi':                psi,
-        'threshold':          threshold,
-        'coincidence_window': coincidence_window,
-        'n_trials':           n_trials,
-        'snr_grid':           snr_grid,
-        'antennas':           antennas,
+        'steps':               steps,
+        'steps_ns':            steps_ns,
+        'snr50':               np.array(snr50_list),
+        'window':              window,
+        'window_ns':           window_ns,
+        'phi':                 phi,
+        'theta':               theta,
+        'psi':                 psi,
+        'thresholds_per_step': thresholds_per_step,
+        'coincidence_window':  coincidence_window,
+        'n_trials':            n_trials,
+        'snr_grid':            snr_grid,
+        'antennas':            antennas,
     }
 
     if save_filename:
         os.makedirs('plots', exist_ok=True)
         np.save(f'plots/{save_filename}_step_opt.npy', opt_results)
+        thr_note = ('per-step' if isinstance(thresholds_per_step, dict)
+                    else f'{float(thresholds_per_step):.3f}')
         data = np.column_stack([steps, steps_ns, snr50_list])
         header = (
             f"Stride optimization at (phi={phi:.1f}, theta={theta:.1f}, psi={psi:.1f})\n"
-            f"Threshold={threshold:.3f}, Window={window} samp ({window_ns:.1f} ns), "
+            f"Threshold={thr_note}, Window={window} samp ({window_ns:.1f} ns), "
             f"Coinc={coincidence_window:.1f} ns, Trials={n_trials}\n"
             "Stride(samples)\tStride(ns)\tSNR50"
         )
@@ -735,9 +750,11 @@ def plot_window_optimization(opt_results, save_filename=None):
     phi        = opt_results['phi']
     theta      = opt_results['theta']
     psi        = opt_results['psi']
-    threshold  = opt_results['threshold']
+    _tpw       = opt_results.get('thresholds_per_window', opt_results.get('threshold'))
+    thr_label  = ('per-window' if isinstance(_tpw, dict)
+                  else f'{float(_tpw):.3f}')
     step       = opt_results['step']
-    sample_ns  = geometry.ritc_sample_step 
+    sample_ns  = geometry.ritc_sample_step
     step_ns    = step * sample_ns
 
     fig, ax = plt.subplots(figsize=(9, 5))
@@ -761,7 +778,7 @@ def plot_window_optimization(opt_results, save_filename=None):
     ax.set_ylabel('SNR at 50% Coincidence Efficiency', fontsize=12)
     ax.set_title(
         f'Window Optimization: φ={phi:.1f}°, θ={theta:.1f}°, ψ={psi:.1f}°\n'
-        f'Threshold = {threshold:.3f}  |  Step = {step} samples ({step_ns:.1f} ns)',
+        f'Threshold = {thr_label}  |  Step = {step} samples ({step_ns:.1f} ns)',
         fontsize=12,
     )
     ax.legend(fontsize=10)
@@ -861,7 +878,8 @@ def plot_step_optimization(opt_results, save_filename=None):
     phi       = opt_results['phi']
     theta     = opt_results['theta']
     psi       = opt_results['psi']
-    threshold = opt_results['threshold']
+    _tps      = opt_results.get('thresholds_per_step', opt_results.get('threshold'))
+    thr_label = ('per-step' if isinstance(_tps, dict) else f'{float(_tps):.3f}')
     window    = opt_results['window']
     window_ns = opt_results['window_ns']
 
@@ -884,7 +902,7 @@ def plot_step_optimization(opt_results, save_filename=None):
     ax.set_ylabel('SNR at 50% Coincidence Efficiency', fontsize=12)
     ax.set_title(
         f'Stride Optimization: φ={phi:.1f}°, θ={theta:.1f}°, ψ={psi:.1f}°\n'
-        f'Threshold = {threshold:.3f}  |  Window = {window} samp ({window_ns:.1f} ns)',
+        f'Threshold = {thr_label}  |  Window = {window} samp ({window_ns:.1f} ns)',
         fontsize=12,
     )
     ax.legend(fontsize=10)
@@ -975,6 +993,11 @@ if __name__ == '__main__':
                         help='Increment for stride scan (samples) [step mode]')
     parser.add_argument('--window',         type=int, default=160,
                         help='Fixed power-sum window (samples) used in step/filter modes')
+    parser.add_argument('--step-threshold-jsons', type=str, nargs='+', default=None,
+                        help='Per-step threshold JSON files, one per stride value in the '
+                             'scan grid (in order, after filtering out strides > window). '
+                             'Each JSON is loaded for --threshold-index. '
+                             'If omitted, --threshold-json / --threshold is used for all strides.')
 
     # ---------- Filter frequency scan parameters ----------
     parser.add_argument('--filter-freqs-ghz', type=float, nargs='+',
@@ -1097,11 +1120,33 @@ if __name__ == '__main__':
 
     # -------------------------------------------------------------------------
     elif args.mode == 'step':
+        # Build per-step threshold dict if calibrated JSONs are provided.
+        # Replicate the same step grid + guard logic used inside optimize_step
+        # so indices align with --step-threshold-jsons order.
+        _step_all = np.arange(args.step_min, args.step_max + 1, args.step_scan_step, dtype=int)
+        _valid_steps = _step_all[_step_all <= args.window]
+        if args.step_threshold_jsons:
+            if len(args.step_threshold_jsons) != len(_valid_steps):
+                parser.error(
+                    f'--step-threshold-jsons: expected {len(_valid_steps)} files '
+                    f'(one per valid stride in {_valid_steps.tolist()}), '
+                    f'got {len(args.step_threshold_jsons)}')
+            _idx = args.threshold_index if args.threshold_index is not None else 0
+            thresholds_per_step = {}
+            for s, json_path in zip(_valid_steps, args.step_threshold_jsons):
+                with open(json_path, 'r') as _f:
+                    _jdata = json.load(_f)
+                thresholds_per_step[int(s)] = _jdata['thresholds'][_idx]['threshold_lhcp']
+                print(f"  step={s}: threshold={thresholds_per_step[int(s)]:.4f} "
+                      f"(from {json_path}, entry {_idx})")
+        else:
+            thresholds_per_step = threshold_resolved
+
         opt = optimize_step(
             phi=args.phi,
             theta=args.theta,
             psi=args.psi,
-            threshold=threshold_resolved,
+            thresholds_per_step=thresholds_per_step,
             coincidence_window=coincidence_window_resolved,
             snr_grid=snr_grid,
             n_trials=args.trials,

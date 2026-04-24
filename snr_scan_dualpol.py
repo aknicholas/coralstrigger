@@ -549,113 +549,96 @@ def plot_multi_scurves(results_list, save_filename=None):
     return fig, ax
 
 
-def plot_filter_comparison(res_f1, res_f2, save_filename=None):
+def plot_settings_comparison(results, save_filename=None):
     """
-    Two-panel figure comparing filt1 vs filt2 S-curves under two SNR axis definitions:
+    Single-panel overlay comparing 2 or 3 trigger configurations on a common
+    per-antenna SNR axis.  Intended to show the efficiency gain from moving
+    to optimized window/step/filter settings.
 
-    Left panel  — Common σ_f1 axis: both curves plotted against the same
-                  Vpp/(2*σ_f1) denominator (what the scan outputs directly).
-                  The two curves nearly overlap, showing that on a common
-                  physical input scale the threshold improvement is invisible.
-
-    Right panel — Native σ axis: filt1 unchanged (σ_f1 denominator); filt2
-                  x-values rescaled by σ_f2/σ_f1 so the x-axis reads
-                  Vpp/(2*σ_f2).  The filt2 curve shifts left by that ratio,
-                  revealing the intrinsic sensitivity gain of the second filter.
+    Parameters
+    ----------
+    results : list of dict
+        2-entry: [reference, optimized]
+        3-entry: [unopt+nofilt, unopt+filt, opt+filt]
+    save_filename : str or None
+        Base filename; saves plots/<save_filename>_settings_comparison.png.
     """
-    snr_f1       = res_f1['snr']
-    eff_f1       = res_f1['eff_coinc']
-    thr_f1       = res_f1['threshold_lhcp']
+    sample_ns = 0.25  # ns per ADC sample (4 GHz ADC)
 
-    snr_f2_common = res_f2['snr']         # same σ_f1 denominator as scanned
-    eff_f2        = res_f2['eff_coinc']
-    thr_f2        = res_f2['threshold_lhcp']
+    if len(results) == 3:
+        colors     = ['#1f77b4', '#2ca02c', '#d62728']  # blue, green, red
+        linestyles = ['-', '--', '-.']
+    else:
+        colors     = ['#1f77b4', '#d62728']             # blue, red
+        linestyles = ['-', '--']
 
-    sigma_f1 = res_f1.get('noise_rms_f1') or res_f2.get('noise_rms_f1') or 0.852
-    sigma_f2 = res_f2.get('noise_rms_f2') or 0.592
-    ratio    = sigma_f2 / sigma_f1        # e.g. 0.695
-
-    # Rescaled x-axis: each filt2 SNR value expressed in its own σ_f2 units
-    snr_f2_native = snr_f2_common * ratio
-
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
-    c1, c2 = '#1f77b4', '#d62728'   # blue = filt1, red = filt2
-
-    def mark_50(ax, snr_arr, eff, color):
+    def _snr50(snr_arr, eff):
         idx = np.where(eff >= 0.5)[0]
         if len(idx) == 0:
-            return
+            return None
         k = idx[0]
         if k > 0:
             x0, x1 = snr_arr[k-1], snr_arr[k]
             y0, y1 = eff[k-1], eff[k]
-            snr_50 = x0 + (0.5 - y0) * (x1 - x0) / (y1 - y0) if y1 != y0 else x1
-        else:
-            snr_50 = snr_arr[0]
-        ax.axvline(snr_50, color=color, linestyle=':', alpha=0.6, linewidth=1.2)
-        ax.text(snr_50, 0.04, f'{snr_50:.2f}', ha='center', fontsize=9,
-                color=color, bbox=dict(boxstyle='round', facecolor='white',
-                                       alpha=0.8, edgecolor=color, linewidth=0.7))
+            return x0 + (0.5 - y0) * (x1 - x0) / (y1 - y0) if y1 != y0 else x1
+        return snr_arr[0]
 
-    # ---- Left panel: common σ_f1 axis ----------------------------------------
-    ax = axes[0]
-    ax.plot(snr_f1,       eff_f1, '-',  color=c1, linewidth=2,
-            label=f'filt1  1.5 GHz   T={thr_f1:.3f}')
-    ax.plot(snr_f2_common, eff_f2, '--', color=c2, linewidth=2,
-            label=f'filt2  750 MHz   T={thr_f2:.3f}')
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    snr_extents = []
+    for res, color, ls in zip(results, colors, linestyles):
+        snr  = res['snr']
+        eff  = res['eff_coinc']
+        win  = res.get('window', 160)
+        step = res.get('step', 40)
+        filt = res.get('apply_second_filter', False)
+        thr  = res['threshold_lhcp']
+        fc   = res.get('fc_second') or 750e6
+        filt_str = f'1.5G+{fc/1e6:.0f}M' if filt else '1.5G only'
+        label = (f'win={win}samp ({win*sample_ns:.1f}ns), '
+                 f'step={step}samp ({step*sample_ns:.1f}ns), '
+                 f'{filt_str},  T={thr:.3f}')
+        ax.plot(snr, eff, ls, color=color, linewidth=2.0, label=label)
+        s50 = _snr50(snr, eff)
+        if s50 is not None:
+            ax.axvline(s50, color=color, linestyle=':', alpha=0.6, linewidth=1.2)
+            ax.text(s50, 0.04, f'{s50:.2f}', ha='center', fontsize=9, color=color,
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8,
+                              edgecolor=color, linewidth=0.7))
+        snr_extents.extend([snr[0], snr[-1]])
+
     ax.axhline(0.5, color='gray', linestyle='--', alpha=0.4, linewidth=1)
-    mark_50(ax, snr_f1,        eff_f1, c1)
-    mark_50(ax, snr_f2_common, eff_f2, c2)
-    ax.set_xlabel(r'Per-antenna SNR $= V_{pp}\,/\,(2\,\sigma_{f1})$  [common axis]',
-                  fontsize=11)
-    ax.set_ylabel('Coincidence Trigger Efficiency', fontsize=11)
+
+    phi   = results[0]['phi']
+    theta = results[0]['theta']
+    psi   = results[0]['psi']
+
+    ax.set_xlabel(r'Per-antenna SNR $= V_{pp}\,/\,(2\,\sigma_{f1})$', fontsize=12)
+    ax.set_ylabel('Coincidence Trigger Efficiency', fontsize=12)
     ax.set_ylim(-0.05, 1.05)
-    ax.set_xlim(snr_f1[0] - 0.05, snr_f1[-1] + 0.05)
+    ax.set_xlim(min(snr_extents) - 0.05, max(snr_extents) + 0.05)
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=10, loc='upper left')
-    ax.set_title(f'Common $\\sigma_{{f1}}$ reference  ($\\sigma_{{f1}}={sigma_f1:.3f}$)\n'
-                 'Curves nearly overlap — improvement hidden in threshold value',
-                 fontsize=10)
-
-    # ---- Right panel: each curve on its own native σ axis -------------------
-    ax = axes[1]
-    ax.plot(snr_f1,        eff_f1, '-',  color=c1, linewidth=2,
-            label=f'filt1   $\\sigma_{{f1}}={sigma_f1:.3f}$')
-    ax.plot(snr_f2_native, eff_f2, '--', color=c2, linewidth=2,
-            label=f'filt2   $\\sigma_{{f2}}={sigma_f2:.3f}$')
-    ax.axhline(0.5, color='gray', linestyle='--', alpha=0.4, linewidth=1)
-    mark_50(ax, snr_f1,        eff_f1, c1)
-    mark_50(ax, snr_f2_native, eff_f2, c2)
-    ax.set_xlabel(r'Per-antenna SNR $= V_{pp}\,/\,(2\,\sigma)$  '
-                  r"[each filter's own $\sigma$]", fontsize=11)
-    x_max = max(snr_f1[-1], snr_f2_native[-1])
-    ax.set_xlim(min(snr_f1[0], snr_f2_native[0]) - 0.05, x_max + 0.05)
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=10, loc='upper left')
-    ax.set_title(f'Native $\\sigma$ reference  '
-                 f'(filt2 axis $\\times\\,\\sigma_{{f2}}/\\sigma_{{f1}} = {ratio:.3f}$)\n'
-                 'Leftward shift reveals intrinsic sensitivity gain', fontsize=10)
-
-    phi   = res_f1['phi']
-    theta = res_f1['theta']
-    psi   = res_f1['psi']
-    fig.suptitle(
-        f'Filter Comparison: Effect of SNR-axis Definition on S-Curve\n'
-        f'($\\varphi={phi:.1f}^\\circ$, '
-        f'$\\theta={theta:.1f}^\\circ$, '
-        f'$\\psi={psi:.1f}^\\circ$)',
+    ax.legend(fontsize=9, loc='upper left')
+    ax.set_title(
+        f'Settings Optimization Comparison\n'
+        f'$\\varphi={phi:.1f}^\\circ$, $\\theta={theta:.1f}^\\circ$, $\\psi={psi:.1f}^\\circ$',
         fontsize=13)
 
     plt.tight_layout()
 
     if save_filename:
         os.makedirs('plots', exist_ok=True)
-        out = f'plots/{save_filename}_filter_comparison.png'
+        out = f'plots/{save_filename}_settings_comparison.png'
         plt.savefig(out, dpi=150, bbox_inches='tight')
         print(f"Saved: {out}")
 
     plt.show()
-    return fig, axes
+    return fig, ax
+
+
+def plot_filter_comparison(res_f1, res_f2, save_filename=None):
+    """Backward-compatible wrapper — passes a 2-element list to plot_settings_comparison."""
+    return plot_settings_comparison([res_f1, res_f2], save_filename=save_filename)
 
 
 if __name__ == '__main__':
@@ -677,9 +660,14 @@ if __name__ == '__main__':
                        help='Path to threshold_analysis_dualpol.json; overrides '
                             '--threshold-lhcp, --threshold-rhcp, and --coincidence-window')
     parser.add_argument('--filt2-threshold-json', type=str, default=None,
-                       help='Path to a second threshold JSON used for the filt2=True run '
+                       help='Path to a second threshold JSON used for the optimized filt2=True run '
                             'when --filter-scan is active. If omitted, the same JSON '
                             '(--threshold-json) is used for both filter configs.')
+    parser.add_argument('--ref-filt2-threshold-json', type=str, default=None,
+                       help='Path to a threshold JSON for the unoptimized filt2=True run '
+                            'in --filter-scan 3-curve mode (win=ref, step=ref, filt=True). '
+                            'When provided together with --filt2-threshold-json the plot will '
+                            'show 3 curves: nofilt, ref+filt, opt+filt.')
     parser.add_argument('--threshold-index', type=int, default=None,
                        help='Index into the "thresholds" list in the JSON. '
                             'Omit to run all entries; pass an integer to run only that entry.')
@@ -693,6 +681,12 @@ if __name__ == '__main__':
     # Power sum parameters
     parser.add_argument('--window', type=int, default=160, help='Power sum window (samples)')
     parser.add_argument('--step', type=int, default=40, help='Power sum step (samples)')
+    parser.add_argument('--ref-window', type=int, default=None,
+                       help='Reference window (samples) for the filt1 run in --filter-scan. '
+                            'Defaults to --window if not specified.')
+    parser.add_argument('--ref-step', type=int, default=None,
+                       help='Reference step (samples) for the filt1 run in --filter-scan. '
+                            'Defaults to --step if not specified.')
     
     # Output
     parser.add_argument('--save', type=str, default='snr_scan_dualpol',
@@ -734,6 +728,12 @@ if __name__ == '__main__':
     else:
         filter_configs = [args.second_filter]
 
+    # Reference window/step for the filt1/unoptimized runs in --filter-scan
+    ref_window = args.ref_window if args.ref_window is not None else args.window
+    ref_step   = args.ref_step   if args.ref_step   is not None else args.step
+    three_curve_mode = (args.filter_scan
+                        and getattr(args, 'ref_filt2_threshold_json', None) is not None)
+
     # -------------------------------------------------------------------------
     # JSON mode: run one scan per threshold entry and overlay all S-curves
     # -------------------------------------------------------------------------
@@ -756,7 +756,7 @@ if __name__ == '__main__':
         ant_configs = ([[0], [0,1], [0,1,2], [0,1,2,3]] if args.ant_scan
                        else [args.antennas])  # None = default (all four)
 
-        # Build a second set of threshold entries for filt2 when a separate JSON is given
+        # Build threshold entry lists for filt2 scans
         if args.filt2_threshold_json is not None and args.filter_scan:
             with open(args.filt2_threshold_json, 'r') as _f2:
                 _thr_data2 = json.load(_f2)
@@ -764,35 +764,62 @@ if __name__ == '__main__':
             if args.threshold_index is not None:
                 _thr_entries2 = [_thr_entries2[args.threshold_index]]
             if len(_thr_entries2) < len(thr_entries):
-                # Warn rather than silently padding — mismatched JSON entries
                 print(f"WARNING: filt2 JSON has {len(_thr_entries2)} entries but filt1 has "
                       f"{len(thr_entries)}. Extra filt1 entries will be skipped.")
                 thr_entries = thr_entries[:len(_thr_entries2)]
             filt2_thr_entries = _thr_entries2
-            print(f"Loaded filt2 thresholds from {args.filt2_threshold_json}")
+            print(f"Loaded optimized filt2 thresholds from {args.filt2_threshold_json}")
         else:
-            filt2_thr_entries = thr_entries  # same thresholds for both configs
+            filt2_thr_entries = thr_entries
+
+        # Optional 3-curve mode: load threshold JSON for unoptimized+filter run
+        if three_curve_mode:
+            with open(args.ref_filt2_threshold_json, 'r') as _f3:
+                _thr_data3 = json.load(_f3)
+            _thr_entries3 = _thr_data3['thresholds']
+            if args.threshold_index is not None:
+                _thr_entries3 = [_thr_entries3[args.threshold_index]]
+            if len(_thr_entries3) < len(thr_entries):
+                thr_entries = thr_entries[:len(_thr_entries3)]
+            ref_filt2_thr_entries = _thr_entries3
+            print(f"Loaded reference filt2 thresholds from {args.ref_filt2_threshold_json}")
+            # scan_cfgs: (filt2, run_win, run_step, per-i thr_entries_list, filt_tag)
+            scan_cfgs = [
+                (False, ref_window,   ref_step,   thr_entries,          'filt1'),
+                (True,  ref_window,   ref_step,   ref_filt2_thr_entries,'filt2ref'),
+                (True,  args.window,  args.step,  filt2_thr_entries,    'filt2opt'),
+            ]
+        elif args.filter_scan:
+            scan_cfgs = [
+                (False, ref_window,  ref_step,  thr_entries,       'filt1'),
+                (True,  args.window, args.step, filt2_thr_entries, 'filt2'),
+            ]
+        else:
+            filt_val = (payload.APPLY_SECOND_FILTER
+                        if args.second_filter is None else args.second_filter)
+            scan_cfgs = [
+                (filt_val, args.window, args.step, thr_entries, ''),
+            ]
 
         all_results = []
         for i, entry in enumerate(thr_entries):
             rate_label = entry.get('target_global_rate_hz', None)
 
             for ant_cfg in ant_configs:
-                for filt2 in filter_configs:
-                    # Pick the threshold entry for the current filter config
-                    thr_entry = filt2_thr_entries[i] if filt2 else entry
+                for (filt2, run_win, run_step, sc_thr_entries, filt_tag_str) in scan_cfgs:
+                    thr_entry = sc_thr_entries[i]
                     t_lhcp = thr_entry['threshold_lhcp']
                     t_rhcp = thr_entry['threshold_rhcp']
 
                     n = len(ant_cfg) if ant_cfg is not None else 4
                     rate_tag = f"_rate{i}" if len(thr_entries) > 1 else ''
                     ant_tag  = f"_ant{n}"  if args.ant_scan else ''
-                    filt_tag = f"_filt{'2' if filt2 else '1'}" if args.filter_scan else ''
+                    filt_tag = f"_{filt_tag_str}" if filt_tag_str else ''
                     save_tag = f"{args.save}{rate_tag}{ant_tag}{filt_tag}"
 
                     print(f"\n--- Entry {i}: LHCP={t_lhcp:.4f}  target={rate_label} Hz  "
                           f"antennas={ant_cfg if ant_cfg is not None else [0,1,2,3]}  "
-                          f"2nd-filter={filt2} ---")
+                          f"2nd-filter={filt2}  win={run_win}  step={run_step} ---")
 
                     res = run_snr_scan_dualpol(
                         phi=args.phi,
@@ -803,8 +830,8 @@ if __name__ == '__main__':
                         coincidence_window=coinc_window_json,
                         snr_grid=snr_grid,
                         n_trials=args.trials,
-                        window=args.window,
-                        step=args.step,
+                        window=run_win,
+                        step=run_step,
                         save_filename=save_tag,
                         antennas=ant_cfg,
                         apply_second_filter=filt2,
@@ -813,21 +840,25 @@ if __name__ == '__main__':
                         res['target_global_rate_hz'] = rate_label
                     all_results.append(res)
 
+        n_scan_cfgs = len(scan_cfgs)
+        n_ant_cfgs  = len(ant_configs)
+
         if not args.no_plot:
             if len(all_results) == 1:
                 plot_scurves(all_results[0], save_filename=args.save)
             else:
                 plot_multi_scurves(all_results, save_filename=args.save)
-            # For --filter-scan: produce one comparison plot per threshold entry,
-            # pairing filt1 and filt2 results that share the same rate label.
+            # For --filter-scan: one comparison plot per threshold entry.
+            # Each group of n_scan_cfgs consecutive results (for one ant_cfg) forms a comparison.
             if args.filter_scan:
-                filt1_results = [r for r in all_results if not r.get('apply_second_filter', False)]
-                filt2_results = [r for r in all_results if     r.get('apply_second_filter', False)]
-                for rf1, rf2 in zip(filt1_results, filt2_results):
-                    rate = rf1.get('target_global_rate_hz')
+                # Use results for the first ant_cfg only (no ant_scan mixing)
+                for i in range(len(thr_entries)):
+                    group_start = i * n_scan_cfgs * n_ant_cfgs
+                    group = all_results[group_start:group_start + n_scan_cfgs]
+                    rate = group[0].get('target_global_rate_hz')
                     rate_tag = f'_rate{rate:.3g}Hz'.replace('.', 'p') if rate is not None else ''
-                    plot_filter_comparison(rf1, rf2,
-                                          save_filename=f'{args.save}{rate_tag}')
+                    plot_settings_comparison(group,
+                                             save_filename=f'{args.save}{rate_tag}')
 
     # -------------------------------------------------------------------------
     # Single-threshold mode (original behaviour)
@@ -836,40 +867,64 @@ if __name__ == '__main__':
         ant_configs = ([[0], [0,1], [0,1,2], [0,1,2,3]] if args.ant_scan
                        else [args.antennas])
 
+        # Build scan configs for single-threshold mode (mirror of JSON mode)
+        if three_curve_mode:
+            with open(args.ref_filt2_threshold_json, 'r') as _f3:
+                _td3 = json.load(_f3)
+            _e3 = _td3['thresholds'][args.threshold_index if args.threshold_index is not None else 0]
+            ref_filt2_lhcp = _e3['threshold_lhcp']
+            ref_filt2_rhcp = _e3['threshold_rhcp']
+            sc_single = [
+                (False, ref_window,  ref_step,  args.threshold_lhcp,  args.threshold_rhcp,  'filt1'),
+                (True,  ref_window,  ref_step,  ref_filt2_lhcp,       ref_filt2_rhcp,       'filt2ref'),
+                (True,  args.window, args.step, args.threshold_lhcp,  args.threshold_rhcp,  'filt2opt'),
+            ]
+        elif args.filter_scan:
+            sc_single = [
+                (False, ref_window,  ref_step,  args.threshold_lhcp, args.threshold_rhcp, 'filt1'),
+                (True,  args.window, args.step, args.threshold_lhcp, args.threshold_rhcp, 'filt2'),
+            ]
+        else:
+            filt_val = (payload.APPLY_SECOND_FILTER
+                        if args.second_filter is None else args.second_filter)
+            sc_single = [
+                (filt_val, args.window, args.step, args.threshold_lhcp, args.threshold_rhcp, ''),
+            ]
+
         all_results = []
         for ant_cfg in ant_configs:
-            for filt2 in filter_configs:
+            for (filt2, run_win, run_step, t_lhcp, t_rhcp, filt_tag_str) in sc_single:
                 n = len(ant_cfg) if ant_cfg is not None else 4
-                ant_tag  = f"_ant{n}"             if args.ant_scan    else ''
-                filt_tag = f"_filt{'2' if filt2 else '1'}" if args.filter_scan else ''
+                ant_tag  = f"_ant{n}"         if args.ant_scan    else ''
+                filt_tag = f"_{filt_tag_str}" if filt_tag_str     else ''
                 save_tag = f"{args.save}{ant_tag}{filt_tag}"
 
                 res = run_snr_scan_dualpol(
                     phi=args.phi,
                     theta=args.theta,
                     psi=args.psi,
-                    threshold_lhcp=args.threshold_lhcp,
-                    threshold_rhcp=args.threshold_rhcp,
+                    threshold_lhcp=t_lhcp,
+                    threshold_rhcp=t_rhcp,
                     coincidence_window=args.coincidence_window,
                     snr_grid=snr_grid,
                     n_trials=args.trials,
-                    window=args.window,
-                    step=args.step,
+                    window=run_win,
+                    step=run_step,
                     save_filename=save_tag,
                     antennas=ant_cfg,
                     apply_second_filter=filt2,
                 )
                 all_results.append(res)
 
+        n_scan_cfgs = len(sc_single)
         if not args.no_plot:
             if len(all_results) == 1:
                 plot_scurves(all_results[0], save_filename=args.save)
             else:
                 plot_multi_scurves(all_results, save_filename=args.save)
-            if args.filter_scan and len(all_results) == 2:
-                res_f1 = next((r for r in all_results if not r.get('apply_second_filter', False)), None)
-                res_f2 = next((r for r in all_results if     r.get('apply_second_filter', False)), None)
-                if res_f1 is not None and res_f2 is not None:
-                    plot_filter_comparison(res_f1, res_f2, save_filename=args.save)
+            if args.filter_scan:
+                n_ant_cfgs = len(ant_configs)
+                group = all_results[:n_scan_cfgs]   # first ant_cfg group
+                plot_settings_comparison(group, save_filename=args.save)
 
     print("\n=== Scan Complete ===")
