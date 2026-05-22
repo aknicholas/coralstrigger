@@ -15,3 +15,4 @@ plots/
 
 # Notebooks checkpoints
 .ipynb_checkpoints/data/*.Wfm.csv
+data/
