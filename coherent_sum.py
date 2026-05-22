@@ -123,7 +123,7 @@ def coherentSum_dualpol(waveforms_h, waveforms_v, timebase, delays,
         waveforms_h_dig = waveforms_h
         waveforms_v_dig = waveforms_v
 
-    # Step 2: Apply first digital lowpass filter (1.5 GHz Shannon-Whitaker)
+    # Step 2a: Apply first digital lowpass filter (1.5 GHz Shannon-Whitaker)
     if apply_filter:
         waveforms_h_filt1 = filters.apply_Shannon_Whitaker_filter(waveforms_h_dig)
         waveforms_v_filt1 = filters.apply_Shannon_Whitaker_filter(waveforms_v_dig)
@@ -283,7 +283,7 @@ def GimmeInfo(waveforms):
         print("Number of antennas: {}".format(waveforms.shape[0]))
         print("Samples per antenna: {}".format(waveforms.shape[1]))
     elif waveforms.ndim == 3:
-        print("WARNING: 3D waveforms detected - this is old Phase 0 format!")
+        print("WARNING: 3D waveforms detected!")
         print("Shape: {} (sectors, rings, samples)".format(waveforms.shape))
     else:
         print("Waveforms shape: {}".format(waveforms.shape))
@@ -301,7 +301,7 @@ def powerSum(coh_sum, window=32, step=16):
     if len(coh_sum) < window:
         raise ValueError(f"Input length {len(coh_sum)} smaller than window {window}")
 
-    # number of frames )
+    # number of frames
     num_frames = int((len(coh_sum) - window) // step) + 1
     if num_frames <= 0:
         raise ValueError("Computed num_frames <= 0; check window/step/length")
@@ -323,11 +323,10 @@ def powerSum(coh_sum, window=32, step=16):
 
 if __name__ == '__main__':
     """
-    Test/benchmark script using real CoRaLS impulse data.
-    Streamlined pipeline for Sprint 1 dual-pol validation.
+    Test script using impulse data.
     """
     print("=" * 70)
-    print("COHERENT_SUM.PY - Real Impulse Data Benchmark")
+    print("Beginning coherent_sum.py test")
     print("=" * 70)
     
     # =========================================================================

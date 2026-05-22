@@ -1,18 +1,10 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.constants import c as c_light_SI  # m/s
+from scipy.constants import c  # m/s
+import myplot
+from tools import CoRaLs_geometry as corals
 
-# Handle both direct execution and module import
-try:
-    from . import myplot
-    from . import CoRaLs_geometry as corals
-except ImportError:
-    # Running as script directly
-    import myplot
-    import CoRaLs_geometry as corals
-
-# Convert speed of light to m/ns for use with nanosecond time units
-c_light = c_light_SI * 1e-9  # m/ns
+c_light = c * 1e-9  # m/ns
 
 def delay(phi, theta):
     '''

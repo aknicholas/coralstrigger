@@ -8,28 +8,16 @@ ritc_sample_rate = 4  # GHz
 ritc_sample_step = 1/ritc_sample_rate  # ns
 
 # Antenna positions in x-z plane (y=0)
-# Array: 2m square, corners at (±1/√2, 0, ±1/√2)
 span = 2
 d = span/(2*np.sqrt(2))  # d = 1/√2 ≈ 0.707 m
 xpos = [0, 0,  0,  0,  0, 0,  0,  0]
 ypos = [d, d, -d, -d,  d, d, -d, -d]
 zpos = [d, -d, -d, d,  d, -d, -d, d]
 
-# Boresight pointing direction of the physical antennas (shared by all 8 channels).
-# All antennas point the same direction; theta=0 = horizon to avoid pole-wrapping
-# singularities in beam-pattern interpolation.
-#
-# The H-pol / V-pol distinction is NOT encoded here — it is handled in payload_signal.py
-# by selecting different beam pattern functions for each polarization (swapped E/H planes),
-# which correctly captures the 90° physical rotation of the V-pol element around boresight.
-#
-# phi_ant/theta_ant are used as beam-pattern boresight offsets in the legacy
-# getPayloadWaveforms() function. With all entries equal it is a no-op there, which is correct.
 phi_tilt   = [0, 0, 0, 0,   # H-pol boresight pointing (phi)
               0, 0, 0, 0]   # V-pol
 theta_tilt = [0, 0, 0, 0,   # H-pol boresight pointing (theta)
               0, 0, 0, 0]   # V-pol
-
 
 x_ant = np.array(xpos)
 y_ant = np.array(ypos)
@@ -51,15 +39,12 @@ def drawPayload(incoming_wave=False, phi=0, theta=0):
     # 3D view
     ax = fig.add_subplot(121, projection='3d')
     
-    # Draw physical antennas (4 locations)
-    # H-pol channels (0-3)
     ax.scatter(xpos[:4], ypos[:4], zpos[:4], marker='^', color='blue', s=300, 
                alpha=0.8, edgecolors='black', linewidth=2, label='H-pol')
-    # V-pol channels (4-7) at same locations
+
     ax.scatter(xpos[4:], ypos[4:], zpos[4:], marker='s', color='red', s=200, 
                alpha=0.6, edgecolors='black', linewidth=2, label='V-pol')
     
-    # Draw antenna pointing arrows for each physical location
     arrow_length = 0.5
     for i in range(4):
         theta_rad = np.radians(theta_ant[i])
@@ -72,10 +57,8 @@ def drawPayload(incoming_wave=False, phi=0, theta=0):
         ax.text(xpos[i], ypos[i], zpos[i]+0.3, f'Ch{i}(H)\nCh{i+4}(V)', 
                 fontsize=10, fontweight='bold', ha='center')
     
-    # Mark center
     ax.scatter([center_x], [center_y], [center_z], marker='*', color='red', s=400, label='Center')
     
-    # Draw incoming wave if requested
     if incoming_wave:
         r = 2.5
         x_planewave = r * np.cos(np.radians(theta)) * np.cos(np.radians(phi))
@@ -90,7 +73,6 @@ def drawPayload(incoming_wave=False, phi=0, theta=0):
     ax.set_zlabel('Z [m]', fontsize=12, fontweight='bold')
     ax.set_title('3D Antenna Array', fontsize=14, fontweight='bold')
     
-    # Set equal aspect ratio and limits
     max_range = 2.5
     ax.set_xlim([-max_range, max_range])
     ax.set_ylim([-max_range, max_range])
@@ -102,7 +84,6 @@ def drawPayload(incoming_wave=False, phi=0, theta=0):
     ax2 = fig.add_subplot(122)
     ax2.scatter(xpos, zpos, marker='^', color='blue', s=300, alpha=0.8, edgecolors='black', linewidth=2)
     
-    # Draw antenna pointing arrows in 2D (x-z projection)
     for i in range(num_antennas):
         theta_rad = np.radians(theta_ant[i])
         phi_rad = np.radians(phi_ant[i])
@@ -302,32 +283,6 @@ def drawWavefrontPlanes(incoming_wave=False, phi=0, theta=0, show_labels=True):
     ax3.set_xlim([-2.5, 2.5])
     ax3.set_ylim([-2.5, 2.5])
     
-    # Add configuration text box in upper right corner of figure
-    info_text = f'''CoRaLS Array Configuration
-
-Number of Antennas: {num_antennas}
-Array Type: Square
-Array Size: {2*np.sqrt(2):.2f} m × {2*np.sqrt(2):.2f} m
-Antenna Pointing: per phi_ant/theta_ant
-
-Antenna Positions:
-  A1: ({xpos[0]:+.2f}, {ypos[0]:+.2f}, {zpos[0]:+.2f}) m
-  A2: ({xpos[1]:+.2f}, {ypos[1]:+.2f}, {zpos[1]:+.2f}) m
-  A3: ({xpos[2]:+.2f}, {ypos[2]:+.2f}, {zpos[2]:+.2f}) m
-  A4: ({xpos[3]:+.2f}, {ypos[3]:+.2f}, {zpos[3]:+.2f}) m
-
-Wavefront Direction:
-  φ (azimuth): {phi}°
-  θ (elevation): {theta}°
-  Unit vector: ({x_planewave:.3f}, {y_planewave:.3f}, {z_planewave:.3f})
-
-Green arrows: Antenna pointing (phi_ant, theta_ant)
-Red arrows: Incoming wave direction'''
-    
-    fig.text(0.6, 0.1, info_text, fontsize=10, verticalalignment='bottom',
-            horizontalalignment='left', family='monospace', 
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8, pad=0.8))
-    
     plt.tight_layout()
     plt.savefig('plots/geometry.png', dpi=150, bbox_inches='tight')
     print(f"\nWavefront direction (unit vector): ({x_planewave:.3f}, {y_planewave:.3f}, {z_planewave:.3f})")
@@ -336,4 +291,4 @@ Red arrows: Incoming wave direction'''
 
 if __name__=='__main__':
     drawWavefrontPlanes(incoming_wave=True, phi=30, theta=20, show_labels= False)
-    #drawPayload(incoming_wave=False, phi=90, theta=0)
+    drawPayload(incoming_wave=False, phi=90, theta=0)
